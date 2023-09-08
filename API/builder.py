@@ -24,15 +24,11 @@ TensorRT Initialization
 TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE)
 # TRT_LOGGER = trt.Logger(trt.Logger.INFO)
 
-# handle = ctypes.CDLL("libnvinfer_plugin.so", mode=ctypes.RTLD_GLOBAL)
-# if not handle:
-    # raise RuntimeError("Could not load plugin library. Is `libnvinfer_plugin.so` on your LD_LIBRARY_PATH?")
+handle = ctypes.CDLL("libnvinfer_plugin.so", mode=ctypes.RTLD_GLOBAL)
+if not handle:
+    raise RuntimeError("Could not load plugin library. Is `libnvinfer_plugin.so` on your LD_LIBRARY_PATH?")
 
 slice_output_shape = None
-
-handle = ctypes.CDLL("libtrtplugin++.so.1", mode=ctypes.RTLD_GLOBAL)
-if not handle:
-    raise RuntimeError("Could not load plugin library. Is `LayerNorm.so` on your LD_LIBRARY_PATH?")
 
 trt.init_libnvinfer_plugins(TRT_LOGGER, "")
 plg_registry = trt.get_plugin_registry()
@@ -95,11 +91,10 @@ def build_attention_layer(network_helper, prefix, config, weights_dict, x, mask)
     v = network_helper.addShuffle(v, None, (0, -1, num_heads, head_size), (0, 2, 1, 3), "att_v_view_and transpose")
 
     scores = network_helper.addMatMul(q, k, "q_mul_k")
-    print("q_mul_k")
 
     scores = network_helper.addScale(scores, 1/math.sqrt(head_size))
 
-    scores = network_helper.addAdd(scores, input_mask_tensor)
+    scores = network_helper.addAdd(scores, mask)
 
     attn = network_helper.addSoftmax(scores, dim=-1)
     # attn = network_helper.addMaskedSoftmax(scores, mask, 1/math.sqrt(head_size), dim=-1)
@@ -319,12 +314,14 @@ def build_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_t
     attn_bias = network_helper.addMatMul(input_mask_tensor, input_mask_tensor, False, True, "get attn_bias")
     # attn_bias[B, S, S]
     # attn_bias = (1. - attn_bias) * -10000.0
-    tmp_arr = np.array([-1.], dtype=np.float32)
+    # shape: [1, 1, 1]
+    tmp_arr = np.array([[[-1.]]], dtype=np.float32)
     tmp_tensor = network_helper.addConstant(tmp_arr)
     attn_bias  = network_helper.addAdd(attn_bias, tmp_tensor)
-    tmp_arr = np.array([10000.], dtype=np.float32)
-    tmp_tensor = network_helper.addConstant(tmp_arr)
-    attn_bias  = network_helper.addScale(attn_bias, tmp_tensor)
+
+    # tmp_arr = np.array([[[10000.]]], dtype=np.float32)
+    # tmp_tensor = network_helper.addConstant(tmp_arr)
+    attn_bias  = network_helper.addScale(attn_bias, 10000.0)
     # attn_bias = attn_bias.unsqueeze(1).tile([1, self.n_head, 1, 1])   # avoid broadcast =_=
     # attn_bias[B, 1, S, S]
     input_mask_tensor = network_helper.addShuffle(attn_bias, None, (0, 1, 0, -1), None, "input_mask.unsqueeze(-1)")
@@ -377,7 +374,7 @@ def build_engine(args, config, weights_dict, calibrationCacheFile):
         src_ids_tensor = network_helper.addInput(name="src_ids", dtype=trt.int32, shape=(-1, -1, 1))
         pos_ids_tensor = network_helper.addInput(name="pos_ids", dtype=trt.int32, shape=(-1, -1, 1))
         sent_ids_tensor = network_helper.addInput(name="sent_ids", dtype=trt.int32, shape=(-1, -1, 1))
-        input_mask_tensor = network_helper.addInput(name="input_mask", dtype=trt.float32, shape=(-1, 128, 1))
+        input_mask_tensor = network_helper.addInput(name="input_mask", dtype=trt.float32, shape=(-1, -1, 1))
 
         tmp6_tensor = network_helper.addInput(name="tmp6", dtype=trt.int32, shape=(-1, 1, 1))
         tmp7_tensor = network_helper.addInput(name="tmp7", dtype=trt.int32, shape=(-1, 1, 1))

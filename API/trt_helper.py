@@ -269,9 +269,9 @@ class TrtNetworkHelper():
     # def addLayerNorm(self, layer, x, layer_name=None, precision=None):
     def addLayerNorm(self, x, weight, bias, layer_name=None, precision=None):
         """LayerNorm"""
-        plg_creator = self.plugin_registry.get_plugin_creator("LayerNormPluginDynamic", "1", "")
+        plg_creator = self.plugin_registry.get_plugin_creator("LayerNorm", "1", "")
         if not plg_creator:
-            raise RuntimeError("Could not find LayerNormPluginDynamic")
+            raise RuntimeError("Could not find LayerNorm")
 
         # dim = layer.weight.size(0)
         # eps = layer.eps
@@ -281,12 +281,12 @@ class TrtNetworkHelper():
         eps = 0.00001
         gamma = weight
         beta = bias
-        data_type = trt.PluginField("data_type", self.np_data_type, trt.PluginFieldType.INT32)
-        dim = trt.PluginField("dim", np.array([dim], dtype=np.int32), trt.PluginFieldType.INT32)
-        eps = trt.PluginField("eps", np.array([eps], dtype=np.float32), trt.PluginFieldType.FLOAT32)
+        # data_type = trt.PluginField("data_type", self.np_data_type, trt.PluginFieldType.INT32)
+        # dim = trt.PluginField("dim", np.array([dim], dtype=np.int32), trt.PluginFieldType.INT32)
+        # eps = trt.PluginField("eps", np.array([eps], dtype=np.float32), trt.PluginFieldType.FLOAT32)
         # gamma_w = trt.PluginField("gamma", gamma.detach().numpy(), trt.PluginFieldType.FLOAT32)
         # beta_w = trt.PluginField("beta", beta.detach().numpy(), trt.PluginFieldType.FLOAT32)
-        pfc = trt.PluginFieldCollection([data_type, dim, eps])
+        pfc = trt.PluginFieldCollection([])
         plugin = plg_creator.create_plugin("LayerNormPluginDynamic", pfc)
         if not plugin:
             raise RuntimeError("Could not create_plugin LayerNormPluginDynamic")
@@ -469,24 +469,6 @@ class TrtNetworkHelper():
         self.layer_post_process(trt_layer, layer_name, precision)
 
         x = trt_layer.get_output(0)
-        return x
-
-    def addMaskedSoftmax(self, x: trt.ITensor, xs_len: trt.ITensor, scale: float, dim: int = -1, layer_name=None, precision=None) -> trt.ITensor:
-        plg_creator = self.plugin_registry.get_plugin_creator("AttMaskedSoftmaxPluginDynamic", "1", "")
-        if not plg_creator:
-            raise RuntimeError("Could not find AttMaskedSoftmaxPluginDynamic")
-
-        # data_type = trt.PluginField("data_type", self.np_data_type(), dtype=np.int32), trt.PluginFieldType.INT32)
-        data_type = trt.PluginField("data_type", self.np_data_type, trt.PluginFieldType.INT32)
-        scale = trt.PluginField("scale", np.array([scale], dtype=np.float32), trt.PluginFieldType.FLOAT32)
-        pfc = trt.PluginFieldCollection([data_type, scale])
-        plugin = plg_creator.create_plugin("AttMaskedSoftmaxPluginDynamic", pfc)
-        if not plugin:
-            raise RuntimeError("Could not create_plugin AttMaskedSoftmaxPluginDynamic")
-
-        layer = self.network.add_plugin_v2([x, xs_len], plugin)
-        self.set_layer_name(layer, "AttMaskedSoftmaxPluginDynamic")
-        x = layer.get_output(0)
         return x
 
     def addCat(self, inputs = [], dim = 0, layer_name=None, precision=None):
