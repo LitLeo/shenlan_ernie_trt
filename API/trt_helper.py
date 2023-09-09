@@ -203,30 +203,6 @@ class TrtNetworkHelper():
 
         return gather_layer.get_output(0)
 
-    def addEmbeddingLayerNorm(self, args, src, sent, mask,
-                              wwordemb, wtokemb, wposemb, wgamma, wbeta,
-                              layer_name=None, precision=None):
-        plg_creator = self.plugin_registry.get_plugin_creator("CustomEmbLayerNormPluginDynamic", "1", "")
-
-        output_fp16 = trt.PluginField("output_fp16", np.array([1 if args.fp16 else 0]).astype(np.int32), trt.PluginFieldType.INT32)
-        mha_type = trt.PluginField("mha_type_id", np.array([get_mha_dtype(args)], np.int32), trt.PluginFieldType.INT32)
-
-        pfc = trt.PluginFieldCollection([wbeta, wgamma, wwordemb, wtokemb, wposemb, output_fp16, mha_type])
-
-        plugin = plg_creator.create_plugin("embeddings", pfc)
-
-        if not plugin:
-            raise RuntimeError("Could not create_plugin CustomEmbLayerNormPluginDynamic")
-
-        inputs = [src, sent, mask]
-        emb_layer = self.network.add_plugin_v2(inputs, plugin)
-
-        if layer_name is None:
-            layer_name = "CustomEmbLayerNormPluginDynamic"
-
-        self.layer_post_process(emb_layer, layer_name, precision)
-        return emb_layer
-
     def addGELU(self, x, layer_name=None, precision=None):
         POW = self.network.add_constant((1, 1, 1), trt.Weights(np.ascontiguousarray([3.0], dtype=np.float32)))
         MULTIPLY = self.network.add_constant((1, 1, 1), trt.Weights(np.ascontiguousarray([0.044715], dtype=np.float32)))

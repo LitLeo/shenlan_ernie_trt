@@ -76,29 +76,29 @@ struct sample{
     std::string qid;
     std::string label;
     std::vector<int> shape_info_0;
-    std::vector<int64_t> i0;
+    std::vector<int> i0;
     std::vector<int> shape_info_1;
-    std::vector<int64_t> i1;
+    std::vector<int> i1;
     std::vector<int> shape_info_2;
-    std::vector<int64_t> i2;
+    std::vector<int> i2;
     std::vector<int> shape_info_3;
     std::vector<float> i3;
     std::vector<int> shape_info_4;
-    std::vector<int64_t> i4;
+    std::vector<int> i4;
     std::vector<int> shape_info_5;
-    std::vector<int64_t> i5;
+    std::vector<int> i5;
     std::vector<int> shape_info_6;
-    std::vector<int64_t> i6;
+    std::vector<int> i6;
     std::vector<int> shape_info_7;
-    std::vector<int64_t> i7;
+    std::vector<int> i7;
     std::vector<int> shape_info_8;
-    std::vector<int64_t> i8;
+    std::vector<int> i8;
     std::vector<int> shape_info_9;
-    std::vector<int64_t> i9;
+    std::vector<int> i9;
     std::vector<int> shape_info_10;
-    std::vector<int64_t> i10;
+    std::vector<int> i10;
     std::vector<int> shape_info_11;
-    std::vector<int64_t> i11;
+    std::vector<int> i11;
     std::vector<float> out_data;
     uint64_t timestamp;
 };
@@ -131,11 +131,6 @@ class TrtLogger : public nvinfer1::ILogger {
 class TrtHepler {
  public:
   TrtHepler(std::string model_param, int dev_id);
-
-  // int Forward(std::vector<std::shared_ptr<HostDeviceMat>>& inputs,
-              // std::shared_ptr<HostDeviceEntireAllocator> hd_input_allocator_ptr,
-              // std::vector<std::shared_ptr<HostDeviceMat>>& outputs,
-              // std::shared_ptr<HostDeviceEntireAllocator> hd_output_allocator_ptr)
 
   int Forward(sample& s);
 

@@ -61,7 +61,7 @@ void split_string(const std::string& str,
     while ((pos = str.find(delimiter, start)) != std::string::npos && start < length) {
         token = str.substr(start, pos - start);
         fields.push_back(token);
-        start += delimiter.length() + token.length(); 
+        start += delimiter.length() + token.length();
     }
     if (start <= length - 1) {
         token = str.substr(start);
@@ -72,7 +72,7 @@ void split_string(const std::string& str,
 void field2vec(const std::string& input_str,
                bool padding,
                std::vector<int>* shape_info,
-               std::vector<int64_t>* i64_vec,
+               std::vector<int>* i64_vec,
                std::vector<float>* f_vec = nullptr) {
     std::vector<std::string> i_f;
     split_string(input_str, ":", i_f);
@@ -119,11 +119,11 @@ void line2sample(const std::string& line, sample* sout) {
     std::vector<std::string> qid_f;
     split_string(fields[0], ":", qid_f);
     sout->qid = qid_f[1];
-    // Parse label 
+    // Parse label
     std::vector<std::string> label_f;
     split_string(fields[1], ":", label_f);
     sout->label = label_f[1];
-    // Parse input field 
+    // Parse input field
     field2vec(fields[2], true, &(sout->shape_info_0), &(sout->i0));
     field2vec(fields[3], true, &(sout->shape_info_1), &(sout->i1));
     field2vec(fields[4], true, &(sout->shape_info_2), &(sout->i2));
@@ -139,85 +139,17 @@ void line2sample(const std::string& line, sample* sout) {
     return;
 }
 
-// TrtHepler::TrtHepler
-// std::shared_ptr<Predictor> InitPredictor(const std::string& model_file,
-//                                          const std::string& params_file) {
-//   Config config;
-//   config.SetModel(model_file, params_file);
-//   config.EnableUseGpu(100, 0);
-//   // Open the memory optim.
-//   config.EnableMemoryOptim();
-//   // config.Exp_DisableTensorRtOPs({"concat"});
-//   // only kHalf supported
-//   // config.EnableTensorRtEngine(1 << 30, 10, 5, Config::Precision::kFloat32, false,
-//   //                            true);
-//   // dynamic shape
-//   // config.SetTRTDynamicShapeInfo(min_input_shape, max_input_shape,
-//   //                               opt_input_shape);
-//   return CreatePredictor(config);
-// }
-
-// void run(Predictor *predictor, sample& s) {
-//   auto input_names = predictor->GetInputNames();
-
-//   auto set_feature_input = [&predictor](
-//                             const std::string& input_name,
-//                             const std::vector<int>& shape_info,
-//                             const int64_t* data_ptr) {
-//       auto cur_input_t = predictor->GetInputHandle(input_name);
-//       cur_input_t->Reshape(shape_info);
-//       cur_input_t->CopyFromCpu(data_ptr);
-//   };
-//   // first input
-//   set_feature_input(input_names[0], s.shape_info_0, s.i0.data());
-//   // second input
-//   set_feature_input(input_names[1], s.shape_info_1, s.i1.data());
-//   // third input
-//   set_feature_input(input_names[2], s.shape_info_2, s.i2.data());
-//   // fourth input
-//   auto input_t4 = predictor->GetInputHandle(input_names[3]);
-//   input_t4->Reshape(s.shape_info_3);
-//   input_t4->CopyFromCpu(s.i3.data());
-//   // fifth input
-//   set_feature_input(input_names[4], s.shape_info_4, s.i4.data());
-//   set_feature_input(input_names[5], s.shape_info_5, s.i5.data());
-//   set_feature_input(input_names[6], s.shape_info_6, s.i6.data());
-//   set_feature_input(input_names[7], s.shape_info_7, s.i7.data());
-//   set_feature_input(input_names[8], s.shape_info_8, s.i8.data());
-//   set_feature_input(input_names[9], s.shape_info_9, s.i9.data());
-//   set_feature_input(input_names[10], s.shape_info_10, s.i10.data());
-//   set_feature_input(input_names[11], s.shape_info_11, s.i11.data());
-
-//   predictor->Run();
-
-//   auto output_names = predictor->GetOutputNames();
-//   auto output_t = predictor->GetOutputHandle(output_names[0]);
-//   std::vector<int> output_shape = output_t->shape();
-//   int out_num = std::accumulate(output_shape.begin(), output_shape.end(), 1,
-//                                 std::multiplies<int>());
-//   s.out_data.resize(out_num);
-//   output_t->CopyToCpu(s.out_data.data());
-//   struct timeval tv;
-//   gettimeofday(&tv, NULL);
-//   s.timestamp = tv.tv_sec * 1000000 + tv.tv_usec;
-//   return;
-// }
-
 int main(int argc, char *argv[]) {
   // init
-  std::string model_name = argv[1];
-  
-  // std::string para_file = argv[2];
-  std::string model_para_file = argv[2];
+  std::string model_para_file = argv[1];
   std::cout << model_para_file << std::endl;
-  // auto predictor = InitPredictor(model_name, para_file);
   auto trt_helper = new TrtHepler(model_para_file, 0);
   // preprocess
   std::string aline;
   std::ifstream ifs;
-  ifs.open(argv[3], std::ios::in);
+  ifs.open(argv[2], std::ios::in);
   std::ofstream ofs;
-  ofs.open(argv[4], std::ios::out);
+  ofs.open(argv[3], std::ios::out);
   std::vector<sample> sample_vec;
   while (std::getline(ifs, aline)) {
       sample s;
@@ -230,7 +162,7 @@ int main(int argc, char *argv[]) {
       // //run(predictor.get(), s);
       trt_helper->Forward(s);
   }
- 
+
   // postprocess
   for (auto& s : sample_vec) {
       std::ostringstream oss;
@@ -241,7 +173,7 @@ int main(int argc, char *argv[]) {
           if (i == s.out_data.size() - 1) {
               oss << "\t";
           } else {
-              oss << ","; 
+              oss << ",";
           }
       }
       oss << s.timestamp << "\n";
