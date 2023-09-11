@@ -4,7 +4,7 @@ INCLUDE=-I$(CUDA)/include/ \
 -I$(TRT)/include \
 -Isrc
 
-CXX_FLAGS=-std=c++11 -O3 -g -Wno-deprecated-declarations
+CXX_FLAGS=-std=c++11 -O0 -g -Wno-deprecated-declarations
 TRT_LIB = $(TRT)/lib/
 
 LIBS=-L$(CUDA)/lib64/ -lcudart \

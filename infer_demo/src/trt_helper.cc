@@ -16,7 +16,7 @@ cuda_shared_ptr<void> CpuToDevice(const std::vector<int>& shape, int* data_ptr) 
   int data_size = 1;
   for (int i = 0; i < shape.size(); i++) data_size *= shape[i];
   auto ret = cudaMalloc(&d_ptr, data_size * sizeof(int));
-  printf("int memory\n");
+  //printf("int memory\n");
   if (ret) printf("memory error\n");
   ret = cudaMemcpy(d_ptr, cpu_ptr, data_size * sizeof(int), cudaMemcpyHostToDevice);
   if (ret) printf("memory error\n");
@@ -31,7 +31,7 @@ cuda_shared_ptr<void> CpuToDevice(const std::vector<int>& shape, float* data_ptr
   int data_size = 1;
   for (int i = 0; i < shape.size(); i++) data_size *= shape[i];
   auto ret = cudaMalloc(&d_ptr, data_size * sizeof(float));
-  printf("float memory\n");
+  //printf("float memory\n");
   if (ret) printf("memory error\n");
   ret = cudaMemcpy(d_ptr, cpu_ptr, data_size * sizeof(float), cudaMemcpyHostToDevice);
   if (ret) printf("memory error\n");
@@ -155,7 +155,7 @@ int TrtHepler::Forward(sample& s) {
                                tmp8_tensor.get(), tmp9_tensor.get(), tmp10_tensor.get(),
                                tmp11_tensor.get(), tmp12_tensor.get(), tmp13_tensor.get(),
                                cuda_out_ptr.get()};
-  printf("before enqueue\n");
+  //printf("before enqueue\n");
   bool ret = context_->enqueueV2(device_bindings, cuda_stream_, nullptr);
   if (!ret) {
     std::cout << ("context_->enqueueV2 failed!") << std::endl;

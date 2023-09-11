@@ -136,6 +136,8 @@ void line2sample(const std::string& line, sample* sout) {
     field2vec(fields[11], false, &(sout->shape_info_9), &(sout->i9));
     field2vec(fields[12], false, &(sout->shape_info_10), &(sout->i10));
     field2vec(fields[13], false, &(sout->shape_info_11), &(sout->i11));
+
+    sout->out_data.resize(sout->shape_info_11[0]);
     return;
 }
 

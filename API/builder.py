@@ -392,8 +392,8 @@ def build_engine(args, config, weights_dict, calibrationCacheFile):
         network_helper.markOutput(out)
 
         profile = builder.create_optimization_profile()
-        min_shape = (1, 1, 1)
-        opt_shape = (5, 64, 1)
+        min_shape = (1, 128, 1)
+        opt_shape = (5, 128, 1)
         max_shape = (10, 128, 1)
         profile.set_shape("src_ids", min=min_shape, opt=opt_shape, max=max_shape)
         profile.set_shape("sent_ids", min=min_shape, opt=opt_shape, max=max_shape)
