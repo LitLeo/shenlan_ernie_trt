@@ -1,5 +1,6 @@
-TRT = /data/wgyang/9-library/TensorRT
-CUDA = /usr/local/cuda-11.0
+#TRT=/data/wgyang/9-library/TensorRT
+TRT=/home/player/TensorRT/
+CUDA=/usr/local/cuda
 INCLUDE=-I$(CUDA)/include/ \
 -I$(TRT)/include \
 -Isrc
