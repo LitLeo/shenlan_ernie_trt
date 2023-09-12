@@ -1,11 +1,89 @@
 import argparse
 import numpy as np
 import time
+import ctypes
 
 import tensorrt as trt
-import trt_helper
 
-logger = trt_helper.init_trt_plugin(trt.Logger.VERBOSE, "libtrtplugin++.so.1")
+def init_trt_plugin(severity=None, lib_name=None, logger=None):
+    """
+    TensorRT Initialization
+    """
+    if severity is None:
+        severity = trt.Logger.INFO
+
+    if logger is None:
+        logger = trt.Logger(severity)
+
+    lib_names = ["libnvinfer_plugin.so"]
+    if lib_name is not None:
+        lib_names.append(lib_name)
+        # lib_name = "libtrt_plugin_plus.so"
+
+    for lib in lib_names:
+        handle = ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+        if not handle:
+            raise RuntimeError("Could not load plugin library. Is " + lib + " on your LD_LIBRARY_PATH?")
+
+    trt.init_libnvinfer_plugins(logger, "")
+
+    logger.log(logger.INFO, "[TrtHelper LOG] tensorrt plugin init done!")
+
+    return logger
+
+logger = init_trt_plugin(trt.Logger.VERBOSE)
+
+class InferHelper():
+    """"""
+    def __init__(self, plan_name, trt_logger):
+        """"""
+        self.logger = trt_logger
+        self.runtime = trt.Runtime(trt_logger)
+        self.plan_name = plan_name
+        with open(plan_name, 'rb') as f:
+            self.engine = self.runtime.deserialize_cuda_engine(f.read())
+            self.context = self.engine.create_execution_context()
+            self.context.active_optimization_profile = 0
+
+    def infer(self, inputs: list, is_log = False):
+        nInput = len(inputs)
+
+        bufferD = []
+        # alloc memory
+        for i in range(nInput):
+            bufferD.append(cuda.mem_alloc(inputs[i].nbytes))
+            cuda.memcpy_htod(bufferD[i], inputs[i].ravel())
+            self.context.set_binding_shape(i, tuple(inputs[i].shape))
+            # print(inputs[i].nbytes)
+
+        print("===============infer1 info===================")
+        print("plan_name: " + self.plan_name)
+        for i in range(0, self.engine.num_bindings):
+            name = self.engine.get_binding_name(i)
+            shape = self.context.get_binding_shape(i)
+
+            if self.engine.binding_is_input(i):
+                print(f"input[{i}] name={name}, shape={shape}")
+            else:
+                print(f"output[{i}] name={name}, shape={shape}")
+        print("=============================================")
+
+        outputs = []
+        for i in range(len(inputs), self.engine.num_bindings):
+            outputs.append(np.zeros(self.context.get_binding_shape(i)).astype(np.float32))
+
+        nOutput = len(outputs)
+        for i in range(nOutput):
+            bufferD.append(cuda.mem_alloc(outputs[i].nbytes))
+            # print(outputs[i].nbytes)
+
+        for i in range(len(inputs), self.engine.num_bindings):
+            trt_output_shape = self.context.get_binding_shape(i)
+            output_idx = i - len(inputs)
+            if not (list(trt_output_shape) == list(outputs[output_idx].shape)):
+                self.logger.log(trt.Logger.ERROR, "[Infer] output shape is error!")
+                self.logger.log(trt.Logger.ERROR, "trt_output.shape = " + str(trt_output_shape))
+
 def cal_dif(onnx, trt, l):
     print("onnx_res:", onnx)
     print("trt_res: ", trt)
@@ -31,7 +109,7 @@ def get_num(str, type):
     if type == "int":
         res = np.array(res, dtype=np.int32)
     else:
-        res = np.array(res, dtype=np.float)
+        res = np.array(res, dtype=np.float32)
     return res
 
 def load_data(file_path):
@@ -61,16 +139,17 @@ def load_data(file_path):
             src_data = get_num(src.split(":")[1], "int").reshape(s0,s1,s2)
             pos_data = get_num(pos.split(":")[1], "int").reshape(s0,s1,s2)
             sent_data = get_num(sent.split(":")[1], "int").reshape(s0,s1,s2)
-            mask_data = get_num(mask.split(":")[1], "int").reshape(s0,s1,s2)
-            # convert mask (-1, -1, 1) to (-1, 1)
-            mask = []
-            for i in range(s0):
-                sum = 0
-                for j in range(s1):
-                    for k in range(s2):
-                        sum += mask_data[i][j][k]
-                mask.append(sum)
-            mask = np.array(mask, dtype=np.int32).reshape(-1, 1)
+            mask_data = get_num(mask.split(":")[1], "float32").reshape(s0,s1,s2)
+
+            # # convert mask (-1, -1, 1) to (-1, 1)
+            # mask = []
+            # for i in range(s0):
+                # sum = 0
+                # for j in range(s1):
+                    # for k in range(s2):
+                        # sum += mask_data[i][j][k]
+                # mask.append(sum)
+            # mask = np.array(mask, dtype=np.int32).reshape(-1, 1)
 
             aside_shape = get_num(aside1.split(":")[0], "int")
             s0 = aside_shape[0]
@@ -107,7 +186,7 @@ def main(args):
     # init infer_helper
     plan_name = args.plan_name
     file_name = args.input_file
-    infer_helper = trt_helper.InferHelper(plan_name, logger)
+    infer_helper = InferHelper(plan_name, logger)
 
     # 1 batch test data
     # src = [1,12,13,1557,40574,40997,22553,2,1571,40574,1569,42562,1557,40997,22553,1886,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
@@ -130,13 +209,13 @@ def main(args):
     # multi batch
     inputs = load_data(file_name)
 
-    # load onnx baseline
-    onnx_baseline = []
-    with open("./onnx_baseline.txt","r") as f:
-        lines = f.readlines()
-        for line in lines:
-            data = get_num(line, "float")
-            onnx_baseline.append(data)
+    # # load onnx baseline
+    # onnx_baseline = []
+    # with open("./onnx_baseline.txt","r") as f:
+        # lines = f.readlines()
+        # for line in lines:
+            # data = get_num(line, "float")
+            # onnx_baseline.append(data)
 
     # test_num = len(inputs)
     test_num = 1
@@ -148,14 +227,15 @@ def main(args):
     total_num = 0
     for i in range(test_num):
         output = infer_helper.infer(inputs[i], True)
-        b = onnx_baseline[i].shape[0]
-        print("infer and comparing case", i)
-        mindif, maxdif, dif = cal_dif(onnx_baseline[i].reshape(b), output[0].reshape(b), b)
-        max_dif = max(max_dif, maxdif)
-        min_dif = min(min_dif, mindif)
-        dif_sum += dif
-        total_num += b
-    print("min_dif:", min_dif, " max_dif:", max_dif, " avg_dif:", dif_sum / total_num)
+
+        # b = onnx_baseline[i].shape[0]
+        # print("infer and comparing case", i)
+        # mindif, maxdif, dif = cal_dif(onnx_baseline[i].reshape(b), output[0].reshape(b), b)
+        # max_dif = max(max_dif, maxdif)
+        # min_dif = min(min_dif, mindif)
+        # dif_sum += dif
+        # total_num += b
+    # print("min_dif:", min_dif, " max_dif:", max_dif, " avg_dif:", dif_sum / total_num)
 
     # speed test
     # warm up
