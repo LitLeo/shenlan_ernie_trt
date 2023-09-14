@@ -129,6 +129,9 @@ int TrtHepler::Forward(sample& s) {
   float elapsed_time = 0.0;
 
   int binding_idx = 0;
+  //std::vector<std::vector<int>> input_dims = {s.shape_info_0, s.shape_info_1, s.shape_info_2, s.shape_info_3,
+                                              //s.shape_info_4, s.shape_info_5, s.shape_info_6, s.shape_info_7,
+                                              //s.shape_info_8, s.shape_info_9, s.shape_info_10, s.shape_info_11};
   std::vector<std::vector<int>> input_dims = {s.shape_info_0, s.shape_info_1, s.shape_info_2, s.shape_info_3,
                                               s.shape_info_4, s.shape_info_5, s.shape_info_6, s.shape_info_7,
                                               s.shape_info_8, s.shape_info_9, s.shape_info_10, s.shape_info_11};
@@ -151,7 +154,8 @@ int TrtHepler::Forward(sample& s) {
   // set the input dim
 
   void *device_bindings[13] = {rc_ids_tensor.get(), sent_ids_tensor.get(), pos_ids_tensor.get(),
-                               input_mask_tensor.get(), tmp6_tensor.get(), tmp7_tensor.get(),
+                               input_mask_tensor.get(),
+                               tmp6_tensor.get(), tmp7_tensor.get(),
                                tmp8_tensor.get(), tmp9_tensor.get(), tmp10_tensor.get(),
                                tmp11_tensor.get(), tmp12_tensor.get(), tmp13_tensor.get(),
                                cuda_out_ptr.get()};

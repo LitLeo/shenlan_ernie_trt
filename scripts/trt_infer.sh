@@ -1,5 +1,5 @@
-export LD_LIBRARY_PATH=../so:$LD_LIBRARY_PATH
-export LD_LIBRARY_PATH=../so/out:$LD_LIBRARY_PATH
+#export LD_LIBRARY_PATH=../so:$LD_LIBRARY_PATH
+#export LD_LIBRARY_PATH=../so/out:$LD_LIBRARY_PATH
 
 echo $LD_LIBRARY_PATH
 # fp32

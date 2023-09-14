@@ -244,7 +244,6 @@ class TrtNetworkHelper():
 
     # def addLayerNorm(self, layer, x, layer_name=None, precision=None):
     def addLayerNorm(self, x, weight, bias, layer_name=None, precision=None):
-        return x
         """LayerNorm"""
         plg_creator = self.plugin_registry.get_plugin_creator("LayerNorm", "1", "")
         if not plg_creator:
@@ -529,64 +528,5 @@ class TrtNetworkHelper():
 
         x = trt_layer.get_output(0)
         return x
-
-    def addQKV2CTX(self, args, mult_all, mask, layer_name=None, precision=None):
-        plg_creator = self.plugin_registry.get_plugin_creator("CustomQKVToContextPluginDynamic", "1", "")
-
-        has_mask = mask is not None
-        pf_type = trt.PluginField("type_id", np.array([get_mha_dtype(args)], np.int32), trt.PluginFieldType.INT32)
-        pf_hidden_size = trt.PluginField("hidden_size", np.array([768], np.int32), trt.PluginFieldType.INT32)
-        pf_num_heads = trt.PluginField("num_heads", np.array([12], np.int32), trt.PluginFieldType.INT32)
-        pf_has_mask = trt.PluginField("has_mask", np.array([has_mask], np.int32), trt.PluginFieldType.INT32)
-
-        pfc = trt.PluginFieldCollection([pf_hidden_size, pf_num_heads, pf_has_mask, pf_type])
-        qkv2ctx_plug = plg_creator.create_plugin("qkv2ctx", pfc)
-
-        if not qkv2ctx_plug:
-            raise RuntimeError("Could not create_plugin CustomQKVToContextPluginDynamic")
-
-        qkv_in = [mult_all]
-        qkv_in.append(mask)
-        qkv2ctx = self.network.add_plugin_v2(qkv_in, qkv2ctx_plug)
-
-        if layer_name is None:
-            layer_name = "CustomQKVToContextPluginDynamic"
-
-        self.layer_post_process(qkv2ctx, "context_layer", None)
-
-        return qkv2ctx.get_output(0)
-
-    def addskipln(self, args, input_tensor, skip, wgamma, wbeta, layer_name=None, bias=None):
-
-        """
-        Add the skip layer
-        """
-        plg_creator = self.plugin_registry.get_plugin_creator("CustomSkipLayerNormPluginDynamic", "1", "")
-
-        idims = input_tensor.shape
-        assert len(idims) == 5
-        hidden_size = idims[2]
-
-        dtype = trt.float32
-        if args.fp16:
-            dtype = trt.float16
-
-        pf_ld = trt.PluginField("ld", np.array([768], np.int32), trt.PluginFieldType.INT32)
-        pf_beta = trt.PluginField("beta", wbeta, trt.PluginFieldType.FLOAT32)
-        pf_gamma = trt.PluginField("gamma", wgamma, trt.PluginFieldType.FLOAT32)
-        pf_type = trt.PluginField("type_id", np.array([int(dtype)], np.int32), trt.PluginFieldType.INT32)
-
-        fields = [pf_ld, pf_beta, pf_gamma, pf_type]
-
-        if bias:
-            pf_bias = trt.PluginField("bias", bias, trt.PluginFieldType.FLOAT32)
-            fields.append(pf_bias)
-
-        pfc = trt.PluginFieldCollection(fields)
-        skipln_plug = plg_creator.create_plugin("skipln", pfc)
-
-        skipln_inputs = [input_tensor, skip]
-        layer = self.network.add_plugin_v2(skipln_inputs, skipln_plug)
-        return layer.get_output(0)
 
 

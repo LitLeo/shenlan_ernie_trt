@@ -3,6 +3,9 @@ import numpy as np
 import time
 import ctypes
 
+import pycuda.driver as cuda
+import pycuda.autoinit
+
 import tensorrt as trt
 
 def init_trt_plugin(severity=None, lib_name=None, logger=None):
@@ -83,6 +86,34 @@ class InferHelper():
             if not (list(trt_output_shape) == list(outputs[output_idx].shape)):
                 self.logger.log(trt.Logger.ERROR, "[Infer] output shape is error!")
                 self.logger.log(trt.Logger.ERROR, "trt_output.shape = " + str(trt_output_shape))
+
+        # warm up
+        self.context.execute_v2(bufferD)
+
+        T1 = time.perf_counter()
+
+        self.context.execute_v2(bufferD)
+
+        T2 =time.perf_counter()
+        # if is_log:
+        print("time=" + str((T2-T1) * 1000) + "ms")
+
+        for i in range(nInput, nInput + nOutput):
+            cuda.memcpy_dtoh(outputs[i - nInput].ravel(), bufferD[i])
+
+        if is_log:
+            for i in range(0, len(outputs)):
+                print("outputs.shape:" + str(outputs[i].shape))
+                print("outputs.sum:" + str(outputs[i].sum()))
+                print(outputs[i])
+
+            # print("trt_output.shape:" + str(trt_output.shape))
+            # print("trt_output.sum:" + str(trt_output.sum()))
+            # print(trt_output.view(-1)[0:10])
+            # print("torch.allclose result:" + str(torch.allclose(base_output, trt_output, 1e-05, 1e-03)))
+            # print("====================")
+        return outputs
+        # return torch.allclose(base_output, trt_output, 1e-05, 1e-03)
 
 def cal_dif(onnx, trt, l):
     print("onnx_res:", onnx)
@@ -179,7 +210,7 @@ def load_data(file_path):
             # print(aside8_data.shape, aside8_data.dtype)
             # assert(0)
 
-            res.append([src_data, pos_data, sent_data, mask, aside1_data, aside2_data, aside3_data, aside4_data, aside5_data, aside6_data, aside7_data, aside8_data])
+            res.append([src_data, pos_data, sent_data, mask_data, aside1_data, aside2_data, aside3_data, aside4_data, aside5_data, aside6_data, aside7_data, aside8_data])
     return res
 
 def main(args):
@@ -217,8 +248,8 @@ def main(args):
             # data = get_num(line, "float")
             # onnx_baseline.append(data)
 
-    # test_num = len(inputs)
-    test_num = 1
+    test_num = len(inputs)
+    # test_num = 1
 
     # trt infer and compare with onnx baseline
     max_dif = 0
@@ -226,7 +257,7 @@ def main(args):
     dif_sum = 0
     total_num = 0
     for i in range(test_num):
-        output = infer_helper.infer(inputs[i], True)
+        output = infer_helper.infer(inputs[i])
 
         # b = onnx_baseline[i].shape[0]
         # print("infer and comparing case", i)

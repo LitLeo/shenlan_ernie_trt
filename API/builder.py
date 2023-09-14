@@ -24,9 +24,9 @@ TensorRT Initialization
 TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE)
 # TRT_LOGGER = trt.Logger(trt.Logger.INFO)
 
-handle = ctypes.CDLL("libnvinfer_plugin.so", mode=ctypes.RTLD_GLOBAL)
-if not handle:
-    raise RuntimeError("Could not load plugin library. Is `libnvinfer_plugin.so` on your LD_LIBRARY_PATH?")
+# handle = ctypes.CDLL("libnvinfer_plugin.so", mode=ctypes.RTLD_GLOBAL)
+# if not handle:
+    # raise RuntimeError("Could not load plugin library. Is `libnvinfer_plugin.so` on your LD_LIBRARY_PATH?")
 
 slice_output_shape = None
 
@@ -92,7 +92,6 @@ def build_attention_layer(network_helper, prefix, config, weights_dict, x, mask)
     attn = network_helper.addMatMul(attn, v, "matmul(p_attn, value)")
 
     attn = network_helper.addShuffle(attn, (0, 2, 1, 3), (0, -1, 1, num_heads * head_size), None, "attn_transpose_and_reshape")
-    network_helper.markOutput(attn)
 
     # out_w = weights_dict[local_prefix + "out.weight"]
     # out_b = weights_dict[local_prefix + "out.bias"]
@@ -106,8 +105,6 @@ def build_attention_layer(network_helper, prefix, config, weights_dict, x, mask)
 def build_mlp_layer(network_helper, prefix, config, weights_dict, x):
 
     local_prefix = prefix + "ffn_"
-    #  import pdb
-    #  pdb.set_trace()
     fc1_w = weights_dict[local_prefix + "fc_0.w_0"]
     fc1_b = weights_dict[local_prefix + "fc_0.b_0"]
     x = network_helper.addLinear(x, fc1_w, fc1_b)
@@ -147,9 +144,7 @@ def build_block_layer(network_helper, prefix, config, weights_dict, x, mask):
     h = x
 
     # self.attn
-    # network_helper.markOutput(x)
     x = build_attention_layer(network_helper, local_prefix, config, weights_dict, x, mask)
-    network_helper.markOutput(x)
 
     x = network_helper.addAdd(x, h)
 
@@ -157,8 +152,6 @@ def build_block_layer(network_helper, prefix, config, weights_dict, x, mask):
     post_att_norm_weight = weights_dict[local_prefix + "post_att_layer_norm_scale"]
     post_att_norm_bias = weights_dict[local_prefix + "post_att_layer_norm_bias"]
     x = network_helper.addLayerNorm(x, post_att_norm_weight, post_att_norm_bias)
-
-    network_helper.markOutput(x)
 
     h = x
 
@@ -172,24 +165,17 @@ def build_block_layer(network_helper, prefix, config, weights_dict, x, mask):
     fnn_norm_bias = weights_dict[local_prefix + "post_ffn_layer_norm_bias"]
     x = network_helper.addLayerNorm(x, fnn_norm_weight, fnn_norm_bias)
 
-    network_helper.markOutput(x)
-
     return x
 
 def build_encoder_layer(network_helper, prefix, config, weights_dict, x, mask):
     # for layer in range(0, config.encoder_num_layers):
     for layer in range(0, 12):
         local_prefix = prefix + "layer_{}_".format(layer)
-        # print("======================start===================")
         x = build_block_layer(network_helper, local_prefix, config, weights_dict, x, mask)
-        # print("======================end===================")
         # break
 
-    # network_helper.markOutput(x)
     x_shape_len = len(x.shape)
     start = np.zeros(x_shape_len, dtype=np.int32)
-    #  import pdb
-    #  pdb.set_trace()
     #  start_weight = trt.Weights(start)
     start_tensor = network_helper.addConstant(start)
 
@@ -216,7 +202,6 @@ def build_ernie_model(network_helper, config, weights_dict, src_ids_tensor, sent
     pre_encoder_norm_weight = weights_dict["pre_encoder_layer_norm_scale"]
     pre_encoder_norm_bias = weights_dict["pre_encoder_layer_norm_bias"]
     x = network_helper.addLayerNorm(embeddings, pre_encoder_norm_weight, pre_encoder_norm_bias)
-    network_helper.markOutput(x)
 
     encoder_out = build_encoder_layer(network_helper, prefix, config, weights_dict, x, input_mask_tensor)
 
@@ -288,17 +273,12 @@ def build_aside(network_helper, weights_dict, tensor_list):
     x = network_helper.addLinear(x, cls_out_w_aside, cls_out_b_aside)
     return x
 
-def build_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor, pos_ids_tensor, input_mask_tensor, aside_tensor_list):
-    #  def forward(self, x, labels=None):
-        #  x, attn_weights = self.transformer(x)
-        #  logits = self.head(x[:, 0])
-    cls_aside_out = build_aside(network_helper, weights_dict, aside_tensor_list)
-    # print("cls_aside_out")
-
+def process_input_mask(network_helper, input_mask_tensor):
     # input_mask = input_mask.unsqueeze(-1)
     # attn_bias = input_mask.matmul(input_mask, transpose_y=True)
     # input_mask_tensor[B, S, 1]
     attn_bias = network_helper.addMatMul(input_mask_tensor, input_mask_tensor, False, True, "get attn_bias")
+
     # attn_bias[B, S, S]
     # attn_bias = (1. - attn_bias) * -10000.0
     # shape: [1, 1, 1]
@@ -311,7 +291,17 @@ def build_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_t
     attn_bias  = network_helper.addScale(attn_bias, 10000.0)
     # attn_bias = attn_bias.unsqueeze(1).tile([1, self.n_head, 1, 1])   # avoid broadcast =_=
     # attn_bias[B, 1, S, S]
-    input_mask_tensor = network_helper.addShuffle(attn_bias, None, (0, 1, 0, -1), None, "input_mask.unsqueeze(-1)")
+    attn_bias = network_helper.addShuffle(attn_bias, None, (0, 1, 0, -1), None, "input_mask.unsqueeze(-1)")
+
+    return attn_bias
+
+def build_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor, pos_ids_tensor, input_mask_tensor, aside_tensor_list):
+    #  def forward(self, x, labels=None):
+        #  x, attn_weights = self.transformer(x)
+        #  logits = self.head(x[:, 0])
+    cls_aside_out = build_aside(network_helper, weights_dict, aside_tensor_list)
+
+    input_mask_tensor = process_input_mask(network_helper, input_mask_tensor)
 
     x = build_ernie_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor, pos_ids_tensor, input_mask_tensor)
 
@@ -393,8 +383,6 @@ def build_engine(args, config, weights_dict, calibrationCacheFile):
         builder_config.add_optimization_profile(profile)
 
         build_start_time = time.time()
-        #  import pdb
-        #  pdb.set_trace()
         engine = builder.build_engine(network, builder_config)
         build_time_elapsed = (time.time() - build_start_time)
         TRT_LOGGER.log(TRT_LOGGER.INFO, "build engine in {:.3f} Sec".format(build_time_elapsed))
@@ -411,8 +399,6 @@ def load_paddle_weights(path_prefix):
     [inference_program, feed_target_names, fetch_targets] = (
                 paddle.static.load_inference_model(path_prefix, exe, model_filename="__model__", params_filename="__params__"))
 
-    # import pdb
-    # pdb.set_trace()
 
     state_dict = inference_program.state_dict()
 

@@ -1,5 +1,4 @@
-#TRT=/data/wgyang/9-library/TensorRT
-TRT=/home/player/TensorRT/
+TRT=/usr/local/TensorRT/
 CUDA=/usr/local/cuda
 INCLUDE=-I$(CUDA)/include/ \
 -I$(TRT)/include \
