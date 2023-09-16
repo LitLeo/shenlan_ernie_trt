@@ -30,26 +30,42 @@ TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE)
 
 slice_output_shape = None
 
+handle = ctypes.CDLL("libtrtplugin++.so.1", mode=ctypes.RTLD_GLOBAL)
+if not handle:
+    raise RuntimeError("Could not load plugin library. Is `LayerNorm.so` on your LD_LIBRARY_PATH?")
+
 trt.init_libnvinfer_plugins(TRT_LOGGER, "")
 plg_registry = trt.get_plugin_registry()
 
-def set_tensor_name(tensor, prefix, name):
-    tensor.name = prefix + name
+# def set_tensor_name(tensor, prefix, name):
+#     tensor.name = prefix + name
 
-def set_output_name(layer, prefix, name, out_idx = 0):
-    set_tensor_name(layer.get_output(out_idx), prefix, name)
+# def set_output_name(layer, prefix, name, out_idx = 0):
+#     set_tensor_name(layer.get_output(out_idx), prefix, name)
 
-def set_output_range(layer, maxval, out_idx = 0):
-    layer.get_output(out_idx).set_dynamic_range(-maxval, maxval)
+# def set_output_range(layer, maxval, out_idx = 0):
+#     layer.get_output(out_idx).set_dynamic_range(-maxval, maxval)
 
-def get_mha_dtype(config):
-    dtype = trt.float32
-    if config.fp16:
-        dtype = trt.float16
-    # Multi-head attention doesn't use INT8 inputs and output by default unless it is specified.
-    if config.int8 and config.use_int8_multihead and not config.is_calib_mode:
-        dtype = trt.int8
-    return int(dtype)
+# def get_mha_dtype(config):
+#     dtype = trt.float32
+#     if config.fp16:
+#         dtype = trt.float16
+#     # Multi-head attention doesn't use INT8 inputs and output by default unless it is specified.
+#     if config.int8 and config.use_int8_multihead and not config.is_calib_mode:
+#         dtype = trt.int8
+#     return int(dtype)
+
+
+def custom_fc(config, network, input_tensor, out_dims, w):
+    pf_out_dims = trt.PluginField("out_dims", np.array([out_dims], dtype=np.int32), trt.PluginFieldType.INT32)
+    pf_w = trt.PluginField("w", w.numpy(), trt.PluginFieldType.FLOAT32)
+    pf_type = trt.PluginField("type_id", np.array([1 if config.fp16 else 0], np.int32), trt.PluginFieldType.INT32)
+    pfc = trt.PluginFieldCollection([pf_out_dims, pf_w, pf_type])
+    fc_plugin = fc_plg_creator.create_plugin("fcplugin", pfc)
+    plug_inputs = [input_tensor]
+    out_dense = network.add_plugin_v2(plug_inputs, fc_plugin)
+    return out_dense
+
 
 def build_attention_layer(network_helper, prefix, config, weights_dict, x, mask):
 
@@ -81,17 +97,18 @@ def build_attention_layer(network_helper, prefix, config, weights_dict, x, mask)
     v = network_helper.addShuffle(v, None, (0, -1, num_heads, head_size), (0, 2, 1, 3), "att_v_view_and transpose")
 
     scores = network_helper.addMatMul(q, k, "q_mul_k")
+    print("q_mul_k")
 
-    scores = network_helper.addScale(scores, 1/math.sqrt(head_size))
+    # scores = network_helper.addScale(scores, 1/math.sqrt(head_size))
 
-    scores = network_helper.addAdd(scores, mask)
-
-    attn = network_helper.addSoftmax(scores, dim=-1)
-    # attn = network_helper.addMaskedSoftmax(scores, mask, 1/math.sqrt(head_size), dim=-1)
+    # attn = network_helper.addSoftmax(scores, dim=-1)
+    attn = network_helper.addMaskedSoftmax(scores, mask, 1/math.sqrt(head_size), dim=-1)
 
     attn = network_helper.addMatMul(attn, v, "matmul(p_attn, value)")
 
-    attn = network_helper.addShuffle(attn, (0, 2, 1, 3), (0, -1, 1, num_heads * head_size), None, "attn_transpose_and_reshape")
+    attn = network_helper.addShuffle(attn, (0, 2, 1, 3), (0, -1, 1, num_heads * head_size),
+    None, "attn_transpose_and_reshape")
+    # network_helper.markOutput(attn)
 
     # out_w = weights_dict[local_prefix + "out.weight"]
     # out_b = weights_dict[local_prefix + "out.bias"]
@@ -102,9 +119,12 @@ def build_attention_layer(network_helper, prefix, config, weights_dict, x, mask)
 
     return attn_output
 
+
 def build_mlp_layer(network_helper, prefix, config, weights_dict, x):
 
     local_prefix = prefix + "ffn_"
+    #  import pdb
+    #  pdb.set_trace()
     fc1_w = weights_dict[local_prefix + "fc_0.w_0"]
     fc1_b = weights_dict[local_prefix + "fc_0.b_0"]
     x = network_helper.addLinear(x, fc1_w, fc1_b)
@@ -116,6 +136,7 @@ def build_mlp_layer(network_helper, prefix, config, weights_dict, x):
     x = network_helper.addLinear(x, fc2_w, fc2_b)
 
     return x
+
 
 def build_embeddings_layer(network_helper, weights_dict, src_ids_tensor, sent_ids_tensor, pos_ids_tensor):
 
@@ -136,6 +157,9 @@ def build_embeddings_layer(network_helper, weights_dict, src_ids_tensor, sent_id
     x = network_helper.addAdd(src_embedded, pos_embedded)
     x = network_helper.addAdd(x, sent_embedded)
 
+    # x = network_helper.addCat([x1,x2], dim=1)
+    # network_helper.markOutput(x)
+
     return x
 
 
@@ -144,7 +168,9 @@ def build_block_layer(network_helper, prefix, config, weights_dict, x, mask):
     h = x
 
     # self.attn
+    # network_helper.markOutput(x)
     x = build_attention_layer(network_helper, local_prefix, config, weights_dict, x, mask)
+    # network_helper.markOutput(x)
 
     x = network_helper.addAdd(x, h)
 
@@ -152,6 +178,8 @@ def build_block_layer(network_helper, prefix, config, weights_dict, x, mask):
     post_att_norm_weight = weights_dict[local_prefix + "post_att_layer_norm_scale"]
     post_att_norm_bias = weights_dict[local_prefix + "post_att_layer_norm_bias"]
     x = network_helper.addLayerNorm(x, post_att_norm_weight, post_att_norm_bias)
+
+    # network_helper.markOutput(x)
 
     h = x
 
@@ -165,17 +193,25 @@ def build_block_layer(network_helper, prefix, config, weights_dict, x, mask):
     fnn_norm_bias = weights_dict[local_prefix + "post_ffn_layer_norm_bias"]
     x = network_helper.addLayerNorm(x, fnn_norm_weight, fnn_norm_bias)
 
+    # network_helper.markOutput(x)
+
     return x
+
 
 def build_encoder_layer(network_helper, prefix, config, weights_dict, x, mask):
     # for layer in range(0, config.encoder_num_layers):
     for layer in range(0, 12):
         local_prefix = prefix + "layer_{}_".format(layer)
+        print("======================start===================")
         x = build_block_layer(network_helper, local_prefix, config, weights_dict, x, mask)
-        # break
+        print("======================end===================")
+        break
 
+    # network_helper.markOutput(x)
     x_shape_len = len(x.shape)
     start = np.zeros(x_shape_len, dtype=np.int32)
+    #  import pdb
+    #  pdb.set_trace()
     #  start_weight = trt.Weights(start)
     start_tensor = network_helper.addConstant(start)
 
@@ -191,7 +227,9 @@ def build_encoder_layer(network_helper, prefix, config, weights_dict, x, mask):
 
     return x
 
-def build_ernie_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor, pos_ids_tensor, input_mask_tensor):
+
+def build_ernie_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor,
+    pos_ids_tensor, input_mask_tensor):
     #  def forward(self, input_ids):
         #  embedding_output = self.embeddings(input_ids)
         #  encoded, attn_weights = self.encoder(embedding_output)
@@ -202,12 +240,14 @@ def build_ernie_model(network_helper, config, weights_dict, src_ids_tensor, sent
     pre_encoder_norm_weight = weights_dict["pre_encoder_layer_norm_scale"]
     pre_encoder_norm_bias = weights_dict["pre_encoder_layer_norm_bias"]
     x = network_helper.addLayerNorm(embeddings, pre_encoder_norm_weight, pre_encoder_norm_bias)
+    # network_helper.markOutput(x)
 
     encoder_out = build_encoder_layer(network_helper, prefix, config, weights_dict, x, input_mask_tensor)
 
     x = network_helper.addTanh(encoder_out)
 
     return x
+
 
 def build_aside(network_helper, weights_dict, tensor_list):
     # pre_encoder_layer_norm_bias (768,)
@@ -273,66 +313,54 @@ def build_aside(network_helper, weights_dict, tensor_list):
     x = network_helper.addLinear(x, cls_out_w_aside, cls_out_b_aside)
     return x
 
-def process_input_mask(network_helper, input_mask_tensor):
-    # input_mask = input_mask.unsqueeze(-1)
-    # attn_bias = input_mask.matmul(input_mask, transpose_y=True)
-    # input_mask_tensor[B, S, 1]
-    attn_bias = network_helper.addMatMul(input_mask_tensor, input_mask_tensor, False, True, "get attn_bias")
 
-    # attn_bias[B, S, S]
-    # attn_bias = (1. - attn_bias) * -10000.0
-    # shape: [1, 1, 1]
-    tmp_arr = np.array([[[-1.]]], dtype=np.float32)
-    tmp_tensor = network_helper.addConstant(tmp_arr)
-    attn_bias  = network_helper.addAdd(attn_bias, tmp_tensor)
-
-    # tmp_arr = np.array([[[10000.]]], dtype=np.float32)
-    # tmp_tensor = network_helper.addConstant(tmp_arr)
-    attn_bias  = network_helper.addScale(attn_bias, 10000.0)
-    # attn_bias = attn_bias.unsqueeze(1).tile([1, self.n_head, 1, 1])   # avoid broadcast =_=
-    # attn_bias[B, 1, S, S]
-    attn_bias = network_helper.addShuffle(attn_bias, None, (0, 1, 0, -1), None, "input_mask.unsqueeze(-1)")
-
-    network_helper.markOutput(attn_bias)
-
-    return attn_bias
-
-def build_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor, pos_ids_tensor, input_mask_tensor, aside_tensor_list):
+def build_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor, pos_ids_tensor,
+        input_mask_tensor, aside_tensor_list):
     #  def forward(self, x, labels=None):
         #  x, attn_weights = self.transformer(x)
         #  logits = self.head(x[:, 0])
     cls_aside_out = build_aside(network_helper, weights_dict, aside_tensor_list)
+    print("cls_aside_out")
 
-    input_mask_tensor = process_input_mask(network_helper, input_mask_tensor)
-
-    x = build_ernie_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor, pos_ids_tensor, input_mask_tensor)
+    x = build_ernie_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor,
+        pos_ids_tensor, input_mask_tensor)
 
     #  head.weight [10, 768]
     #  head.bias [10]
     cls_out_w = weights_dict["cls_out_w"]
     cls_out_b = weights_dict["cls_out_b"]
     cls_out = network_helper.addLinear(x, cls_out_w, cls_out_b)
-    # print("cls_out")
+    print("cls_out")
 
     x = network_helper.addAdd(cls_out, cls_aside_out)
-    # print("add cls_out and cls_aside_out")
+    print("add cls_out and cls_aside_out")
 
     x = network_helper.addSigmoid(x)
-    # print("sigmoid")
+    print("sigmoid")
     # assert(0)
 
     return x
 
+
 def build_engine(args, config, weights_dict, calibrationCacheFile):
     explicit_batch_flag = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
 
-    with trt.Builder(TRT_LOGGER) as builder, builder.create_network(explicit_batch_flag) as network, builder.create_builder_config() as builder_config:
+    with trt.Builder(TRT_LOGGER) as builder, builder.create_network(explicit_batch_flag) as network, \
+        builder.create_builder_config() as builder_config:
         builder_config.max_workspace_size = args.workspace_size * (1024 * 1024)
 
-        plugin_data_type:int = 0
+        plugin_data_type: int = 0
         if args.fp16:
             builder_config.set_flag(trt.BuilderFlag.FP16)
             plugin_data_type = 1
+
+        if args.int8:
+            builder_config.set_flag(trt.BuilderFlag.INT8)
+
+            # calibrator = ErnieCalibrator(args, calibrationCacheFile, args.max_batch_size, 100)
+            calibrator = ErnieCalibrator(args.calib_path, "calib_cache_file", 5, 128, 200)
+            builder_config.set_quantization_flag(trt.QuantizationFlag.CALIBRATE_BEFORE_FUSION)
+            builder_config.int8_calibrator = calibrator
 
         if args.strict:
             builder_config.set_flag(trt.BuilderFlag.STRICT_TYPES)
@@ -345,7 +373,12 @@ def build_engine(args, config, weights_dict, calibrationCacheFile):
         src_ids_tensor = network_helper.addInput(name="src_ids", dtype=trt.int32, shape=(-1, -1, 1))
         pos_ids_tensor = network_helper.addInput(name="pos_ids", dtype=trt.int32, shape=(-1, -1, 1))
         sent_ids_tensor = network_helper.addInput(name="sent_ids", dtype=trt.int32, shape=(-1, -1, 1))
-        input_mask_tensor = network_helper.addInput(name="input_mask", dtype=trt.float32, shape=(-1, -1, 1))
+        # input_mask_tensor = network_helper.addInput(name="input_mask", dtype=trt.float32, shape=(-1, 128, 1))
+        input_mask_tensor = network_helper.addInput(name="input_mask", dtype=trt.int32, shape=(-1, 1))
+
+        # src_ids_tensor = network_helper.addDumpTensor(src_ids_tensor, "src_ids_tensor")
+        # sent_ids_tensor = network_helper.addDumpTensor(sent_ids_tensor, "sent_ids_tensor")
+        # pos_ids_tensor = network_helper.addDumpTensor(pos_ids_tensor, "pos_ids_tensor")
 
         tmp6_tensor = network_helper.addInput(name="tmp6", dtype=trt.int32, shape=(-1, 1, 1))
         tmp7_tensor = network_helper.addInput(name="tmp7", dtype=trt.int32, shape=(-1, 1, 1))
@@ -356,19 +389,25 @@ def build_engine(args, config, weights_dict, calibrationCacheFile):
         tmp12_tensor = network_helper.addInput(name="tmp12", dtype=trt.int32, shape=(-1, 1, 1))
         tmp13_tensor = network_helper.addInput(name="tmp13", dtype=trt.int32, shape=(-1, 1, 1))
 
-        aside_tensor_list = [tmp6_tensor, tmp7_tensor, tmp8_tensor, tmp9_tensor, tmp10_tensor, tmp11_tensor, tmp12_tensor, tmp13_tensor]
+        aside_tensor_list = [tmp6_tensor, tmp7_tensor, tmp8_tensor, tmp9_tensor, tmp10_tensor,
+            tmp11_tensor, tmp12_tensor, tmp13_tensor]
 
-        out = build_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor, pos_ids_tensor, input_mask_tensor, aside_tensor_list)
+        out = build_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor,
+            pos_ids_tensor, input_mask_tensor, aside_tensor_list)
 
         network_helper.markOutput(out)
 
         profile = builder.create_optimization_profile()
-        min_shape = (1, 128, 1)
-        opt_shape = (5, 128, 1)
+        min_shape = (1, 1, 1)
+        opt_shape = (5, 64, 1)
         max_shape = (10, 128, 1)
         profile.set_shape("src_ids", min=min_shape, opt=opt_shape, max=max_shape)
         profile.set_shape("sent_ids", min=min_shape, opt=opt_shape, max=max_shape)
         profile.set_shape("pos_ids", min=min_shape, opt=opt_shape, max=max_shape)
+
+        min_shape = (1, 1)
+        opt_shape = (5, 1)
+        max_shape = (10, 1)
         profile.set_shape("input_mask", min=min_shape, opt=opt_shape, max=max_shape)
 
         min_shape = (1, 1, 1)
@@ -385,10 +424,15 @@ def build_engine(args, config, weights_dict, calibrationCacheFile):
         builder_config.add_optimization_profile(profile)
 
         build_start_time = time.time()
+        #  import pdb
+        #  pdb.set_trace()
         engine = builder.build_engine(network, builder_config)
         build_time_elapsed = (time.time() - build_start_time)
         TRT_LOGGER.log(TRT_LOGGER.INFO, "build engine in {:.3f} Sec".format(build_time_elapsed))
+        if args.int8:
+            calibrator.free()
         return engine
+
 
 def load_paddle_weights(path_prefix):
     """
@@ -399,8 +443,10 @@ def load_paddle_weights(path_prefix):
     # path_prefix = "./paddle_infer_model"
 
     [inference_program, feed_target_names, fetch_targets] = (
-                paddle.static.load_inference_model(path_prefix, exe, model_filename="__model__", params_filename="__params__"))
+        paddle.static.load_inference_model(path_prefix, exe, model_filename="__model__", params_filename="__params__"))
 
+    # import pdb
+    # pdb.set_trace()
 
     state_dict = inference_program.state_dict()
 
@@ -408,33 +454,68 @@ def load_paddle_weights(path_prefix):
 
     tensor_dict = {}
     for i in state_dict:
-        # print(i)
+        print(i)
         arr = np.array(state_dict[i])
-        # print(arr.shape)
+        print(arr.shape)
 
         tensor_dict[i] = arr
 
-    TRT_LOGGER.log(TRT_LOGGER.INFO, "Load paddle model. Found {:} entries in weight map".format(len(tensor_dict)))
+    TRT_LOGGER.log(TRT_LOGGER.INFO, "Found {:} entries in weight map".format(len(tensor_dict)))
 
     return tensor_dict
 
 
+def generate_calibration_cache(sequence_lengths, workspace_size, config, weights_dict, squad_json,
+        vocab_file, calibrationCacheFile, calib_num):
+    """
+    BERT demo needs a separate engine building path to generate calibration cache.
+    This is because we need to configure SLN and MHA plugins in FP32 mode when
+    generating calibration cache, and INT8 mode when building the actual engine.
+    This cache could be generated by examining certain training data and can be
+    reused across different configurations.
+    """
+    # dynamic shape not working with calibration, so we need generate a calibration cache first using fulldims network
+    if not config.int8 or os.path.exists(calibrationCacheFile):
+        return calibrationCacheFile
+
+    # generate calibration cache
+    saved_use_fp16 = config.fp16
+    config.fp16 = False
+    config.is_calib_mode = True
+
+    with build_engine([1], workspace_size, sequence_lengths, config, weights_dict, squad_json, vocab_file,
+        calibrationCacheFile, calib_num) as engine:
+        TRT_LOGGER.log(TRT_LOGGER.INFO, "calibration cache generated in {:}".format(calibrationCacheFile))
+
+    config.fp16 = saved_use_fp16
+    config.is_calib_mode = False
+
+
 def main():
-    parser = argparse.ArgumentParser(description="TensorRT BERT Sample", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(description="TensorRT BERT Sample",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("-p", "--paddle", required=True, help="The paddle model dir path.")
-    parser.add_argument("-o", "--output", required=True, default="bert_base_384.engine", help="The bert engine file, ex bert.engine")
+    parser.add_argument("-o", "--output", required=True, default="bert_base_384.engine",
+        help="The bert engine file, ex bert.engine")
     parser.add_argument("-b", "--max_batch_size", default=1, type=int, help="max batch size")
-    parser.add_argument("-f", "--fp16", action="store_true", help="Indicates that inference should be run in FP16 precision", required=False)
-    parser.add_argument("-t", "--strict", action="store_true", help="Indicates that inference should be run in strict precision mode", required=False)
-    parser.add_argument("-w", "--workspace-size", default=3000, help="Workspace size in MiB for building the BERT engine", type=int)
+    parser.add_argument("-f", "--fp16", action="store_true",
+        help="Indicates that inference should be run in FP16 precision", required=False)
+    parser.add_argument("-i", "--int8", action="store_true",
+        help="Indicates that inference should be run in INT8 precision", required=False)
+    parser.add_argument("-t", "--strict", action="store_true",
+        help="Indicates that inference should be run in strict precision mode", required=False)
+    parser.add_argument("-w", "--workspace-size", default=3000,
+        help="Workspace size in MiB for building the BERT engine", type=int)
+    parser.add_argument("-c", "--calib_path", help="calibration cache path", required=False)
     # parser.add_argument("-n", "--calib-num", help="calibration cache path", required=False)
 
     args, _ = parser.parse_known_args()
 
-    # calib_cache = "ViT_N{}L{}A{}CalibCache".format(args.model_type, config.transformer.num_layers, config.transformer.num_heads)
+    # calib_cache = "ViT_N{}L{}A{}CalibCache".format(args.model_type,
+    # config.transformer.num_layers, config.transformer.num_heads)
     # print(f"calib_cache = {calib_cache}")
 
-    if args.paddle != None:
+    if args.paddle is not None:
         weights_dict = load_paddle_weights(args.paddle)
     else:
         raise RuntimeError("You need either specify paddle using option --paddle to build TRT model.")

@@ -25,8 +25,6 @@ def metric(qid, label, pred):
     output:
         m: float
     """
-    import pdb
-    pdb.set_trace()
     saver = {}
     assert len(qid) == len(label) == len(pred)
     for q, l, p in zip(qid, label, pred):
