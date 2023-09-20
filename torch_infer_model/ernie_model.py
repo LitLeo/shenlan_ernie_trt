@@ -1,102 +1,66 @@
 # -*- coding: utf-8 -*
-"""
-ERNIE 网络结构
-"""
 
 import logging
 
-import paddle
-from paddle import nn
-from paddle.nn import functional as F
-
-
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+# from ernie_utils import ErnieConfig
 ACT_DICT = {
     'relu': nn.ReLU,
     'gelu': nn.GELU,
 }
 
-class ErnieModel(nn.Layer):
+class ErnieModel(nn.Module):
     """ ernie model """
 
-    def __init__(self, cfg, name=''):
+    def __init__(self, cfg):
         """
         Fundamental pretrained Ernie model
         """
-        nn.Layer.__init__(self)
+        nn.Module.__init__(self)
         self.cfg = cfg
         d_model = cfg['hidden_size']
         d_emb = cfg.get('emb_size', cfg['hidden_size'])
         d_vocab = cfg['vocab_size']
         d_pos = cfg['max_position_embeddings']
-#         d_sent = cfg.get("sent_type_vocab_size", 4) or cfg.get('type_vocab_size', 4)
         if cfg.has('sent_type_vocab_size'):
             d_sent = cfg['sent_type_vocab_size']
         else:
             d_sent = cfg.get('type_vocab_size', 2)
-            
+
         self.n_head = cfg['num_attention_heads']
         self.return_additional_info = cfg.get('return_additional_info', False)
-        self.initializer = nn.initializer.TruncatedNormal(std=cfg['initializer_range'])
 
-        self.ln = _build_ln(d_model, name=append_name(name, 'pre_encoder'))
-        self.word_emb = nn.Embedding(
-            d_vocab,
-            d_emb,
-            weight_attr=paddle.ParamAttr(name=append_name(name, 'word_embedding'), initializer=self.initializer))
-        self.pos_emb = nn.Embedding(
-            d_pos,
-            d_emb,
-            weight_attr=paddle.ParamAttr(name=append_name(name, 'pos_embedding'), initializer=self.initializer))
-#         self.sent_emb = nn.Embedding(
-#             d_sent,
-#             d_emb,
-#             weight_attr=paddle.ParamAttr(name=append_name(name, 'sent_embedding'), initializer=self.initializer))
+        self.word_emb = nn.Embedding(d_vocab, d_emb)
+        self.pos_emb = nn.Embedding(d_pos, d_emb)
+
         self._use_sent_id = cfg.get('use_sent_id', True)
         if self._use_sent_id:
-            self.sent_emb = nn.Embedding(
-                d_sent,
-                d_emb,
-                weight_attr=paddle.ParamAttr(name=append_name(name, 'sent_embedding'), initializer=self.initializer))
+            self.sent_emb = nn.Embedding(d_sent, d_emb)
+
         self._use_task_id = cfg.get('use_task_id', False)
         if self._use_task_id:
             self._task_types = cfg.get('task_type_vocab_size', 3)
             logging.info('using task_id, #task_types:{}'.format(self._task_types))
-            self.task_emb = nn.Embedding(
-            self._task_types,
-            d_emb,
-            weight_attr=paddle.ParamAttr(name=append_name(name, 'task_embedding'), initializer=self.initializer))
+            self.task_emb = nn.Embedding(self._task_types, d_emb)
+
+        self.ln = nn.LayerNorm(d_model)
 
         prob = cfg['hidden_dropout_prob']
         self.dropout = nn.Dropout(p=prob)
 
-        self.encoder_stack = ErnieEncoderStack(cfg, append_name(name, 'encoder'))
+        self.encoder_stack = ErnieEncoderStack(cfg)
 
         if cfg.get('has_pooler', True):
-            self.pooler = _build_linear(cfg['hidden_size'], cfg['hidden_size'], append_name(name, 'pooled_fc'),
-                self.initializer)
+            self.pooler = nn.Linear(cfg['hidden_size'], cfg['hidden_size'])
         else:
             self.pooler = None
 
-        self.train()
+        self.register_buffer("position_ids", torch.arange(d_pos).expand((1, -1)), persistent=False)
+        self.register_buffer("token_type_ids", torch.zeros_like(self.position_ids), persistent=False)
 
-    # FIXME:remove this
-    def eval(self):
-        """ eval """
-        if paddle.in_dynamic_mode():
-            super(ErnieModel, self).eval()
-        self.training = False
-        for l in self.sublayers():
-            l.training = False
-        return self
-
-    def train(self):
-        """ train """
-        if paddle.in_dynamic_mode():
-            super(ErnieModel, self).train()
-        self.training = True
-        for l in self.sublayers():
-            l.training = True
-        return self
+        #self.apply(self._init_weights)
 
     def forward(self,
                 src_ids,
@@ -135,49 +99,49 @@ class ErnieModel(nn.Layer):
             info (Dictionary):
                 addtional middle level info, inclues: all hidden stats, k/v caches.
         """
-        assert len(src_ids.shape) == 2, 'expect src_ids.shape = [batch, sequecen], got %s' % (repr(src_ids.shape))
+        assert len(src_ids.shape) == 2, 'expect src_ids.shape = [batch, sequence], got %s' % (repr(src_ids.shape))
         assert attn_bias is not None if past_cache else True, 'if `past_cache` specified; attn_bias must not be None'
-        d_seqlen = paddle.shape(src_ids)[1]
+        device = src_ids.device
+        batch_size, seq_length = src_ids.shape
         if pos_ids is None:
-            pos_ids = paddle.arange(0, d_seqlen, 1, dtype='int32').reshape([1, -1]).cast('int64')
+            pos_ids = self.position_ids[:, :seq_length]
 
         if attn_bias is None:
             if input_mask is None:
-                input_mask = paddle.cast(src_ids != 0, 'float32')
+                input_mask = torch.ones((batch_size, seq_length), device=device)
             assert len(input_mask.shape) == 2
-            input_mask = input_mask.unsqueeze(-1)
-            attn_bias = input_mask.matmul(input_mask, transpose_y=True)
+            input_mask = input_mask.unsqueeze(-1).to(torch.float32)
+            attn_bias = input_mask.matmul(input_mask.transpose(-2, -1))
             if use_causal_mask:
-                sequence = paddle.reshape(paddle.arange(0, d_seqlen, 1, dtype='float32') + 1., [1, 1, -1, 1])
-                causal_mask = (sequence.matmul(1. / sequence, transpose_y=True) >= 1.).cast('float32')
+                sequence = (torch.arange(0, seq_length, 1, dtype=torch.float32) + 1.).reshape([1, 1, -1, 1])
+                causal_mask = (sequence.matmul(1. / sequence.transpose(-2, -1)) >= 1.).float()
                 attn_bias *= causal_mask
         else:
             assert len(attn_bias.shape) == 3, 'expect attn_bias tobe rank 3, got %r' % attn_bias.shape
 
         attn_bias = (1. - attn_bias) * -10000.0
-        attn_bias = attn_bias.unsqueeze(1).tile([1, self.n_head, 1, 1])   # avoid broadcast =_=
+        attn_bias = attn_bias.unsqueeze(1).tile([1, self.n_head, 1, 1])  # avoid broadcast =_=
 
         if sent_ids is None:
-            sent_ids = paddle.zeros_like(src_ids)
+            sent_ids = self.token_type_ids[:, :seq_length].expand(batch_size, seq_length)
 
         src_embedded = self.word_emb(src_ids)
         pos_embedded = self.pos_emb(pos_ids)
-#         sent_embedded = self.sent_emb(sent_ids)
-#         embedded = src_embedded + pos_embedded + sent_embedded
         embedded = src_embedded + pos_embedded
         if self._use_sent_id:
             sent_embedded = self.sent_emb(sent_ids)
             embedded = embedded + sent_embedded
         if self._use_task_id:
-            task_embeded = self.task_emb(task_ids)
-            embedded = embedded + task_embeded
+            task_embedded = self.task_emb(task_ids)
+            embedded = embedded + task_embedded
 
-        embedded = self.dropout(self.ln(embedded))
+        embedded = self.ln(embedded)
+        embedded = self.dropout(embedded)
 
         encoded, hidden_list, cache_list = self.encoder_stack(embedded, attn_bias, past_cache=past_cache)
 
         if self.pooler is not None:
-            pooled = F.tanh(self.pooler(encoded[:, 0, :]))
+            pooled = torch.tanh(self.pooler(encoded[:, 0, :]))
         else:
             pooled = None
 
@@ -190,15 +154,29 @@ class ErnieModel(nn.Layer):
             return pooled, encoded, additional_info
         return pooled, encoded
 
+    def _init_weights(self, module):
+        """Initialize the weights"""
+        if isinstance(module, nn.Linear):
+            nn.init.trunc_normal_(module.weight, mean=0.0, std=self.cfg['initializer_range'])
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            nn.init.trunc_normal_(module.weight, mean=0.0, std=self.cfg['initializer_range'])
+            # if module.padding_idx is not None:
+            #     module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
 
-class ErnieEncoderStack(nn.Layer):
+
+class ErnieEncoderStack(nn.Module):
     """ ernie encoder stack """
 
-    def __init__(self, cfg, name=None):
+    def __init__(self, cfg):
         super(ErnieEncoderStack, self).__init__()
         n_layers = cfg['num_hidden_layers']
-        self.block = nn.LayerList([
-            ErnieBlock(cfg, append_name(name, 'layer_%d' % i))
+        self.block = nn.ModuleList([
+            ErnieBlock(cfg)
             for i in range(n_layers)
         ])
 
@@ -223,16 +201,17 @@ class ErnieEncoderStack(nn.Layer):
         return inputs, hidden_list, (cache_list_k, cache_list_v)
 
 
-class ErnieBlock(nn.Layer):
+
+class ErnieBlock(nn.Module):
     """ ernie block class """
 
-    def __init__(self, cfg, name=None):
+    def __init__(self, cfg):
         super(ErnieBlock, self).__init__()
         d_model = cfg['hidden_size']
-        self.attn = AttentionLayer(cfg, name=append_name(name, 'multi_head_att'))
-        self.ln1 = _build_ln(d_model, name=append_name(name, 'post_att'))
-        self.ffn = PositionWiseFeedForwardLayer(cfg, name=append_name(name, 'ffn'))
-        self.ln2 = _build_ln(d_model, name=append_name(name, 'post_ffn'))
+        self.attn = AttentionLayer(cfg)
+        self.ln1 = nn.LayerNorm(d_model)
+        self.ffn = PositionWiseFeedForwardLayer(cfg)
+        self.ln2 = nn.LayerNorm(d_model)
         prob = cfg.get('intermediate_dropout_prob', cfg['hidden_dropout_prob'])
         self.dropout = nn.Dropout(p=prob)
 
@@ -250,12 +229,12 @@ class ErnieBlock(nn.Layer):
         return hidden, cache
 
 
-class AttentionLayer(nn.Layer):
+class AttentionLayer(nn.Module):
     """ attention layer """
 
-    def __init__(self, cfg, name=None):
+    def __init__(self, cfg):
         super(AttentionLayer, self).__init__()
-        initializer = nn.initializer.TruncatedNormal(std=cfg['initializer_range'])
+        # initializer = nn.initializer.TruncatedNormal(std=cfg['initializer_range'])
         d_model = cfg['hidden_size']
         n_head = cfg['num_attention_heads']
         assert d_model % n_head == 0
@@ -265,10 +244,10 @@ class AttentionLayer(nn.Layer):
         self.n_head = n_head
         self.d_key = d_model_q // n_head
 
-        self.q = _build_linear(d_model, d_model_q, append_name(name, 'query_fc'), initializer)
-        self.k = _build_linear(d_model, d_model_q, append_name(name, 'key_fc'), initializer)
-        self.v = _build_linear(d_model, d_model_v, append_name(name, 'value_fc'), initializer)
-        self.o = _build_linear(d_model_v, d_model, append_name(name, 'output_fc'), initializer)
+        self.q = nn.Linear(d_model, d_model_q)
+        self.k = nn.Linear(d_model, d_model_q)
+        self.v = nn.Linear(d_model, d_model_v)
+        self.o = nn.Linear(d_model_v, d_model)
         self.dropout = nn.Dropout(p=cfg['attention_probs_dropout_prob'])
 
     def forward(self, queries, keys, values, attn_bias, past_cache):
@@ -286,41 +265,40 @@ class AttentionLayer(nn.Layer):
         cache = (k, v)
         if past_cache is not None:
             cached_k, cached_v = past_cache
-            k = paddle.concat([cached_k, k], 1)
-            v = paddle.concat([cached_v, v], 1)
+            k = torch.concat([cached_k, k], 1)
+            v = torch.concat([cached_v, v], 1)
 
         # [batch, head, seq, dim]
-        q = q.reshape([0, 0, self.n_head, q.shape[-1] // self.n_head]).transpose([0, 2, 1, 3])
+        q = q.reshape([q.shape[0], q.shape[1], self.n_head, q.shape[-1] // self.n_head]).permute([0, 2, 1, 3])
         # [batch, head, seq, dim]
-        k = k.reshape([0, 0, self.n_head, k.shape[-1] // self.n_head]).transpose([0, 2, 1, 3])
+        k = k.reshape([k.shape[0], k.shape[1], self.n_head, k.shape[-1] // self.n_head]).permute([0, 2, 1, 3])
         # [batch, head, seq, dim]
-        v = v.reshape([0, 0, self.n_head, v.shape[-1] // self.n_head]).transpose([0, 2, 1, 3])
-        q = q.scale(self.d_key ** -0.5)
-        score = q.matmul(k, transpose_y=True)
+        v = v.reshape([v.shape[0], v.shape[1], self.n_head, v.shape[-1] // self.n_head]).permute([0, 2, 1, 3])
+        # q = q.scale(self.d_key ** -0.5)
+        score = q.matmul(k.transpose(-2, -1))
+        score = score / (self.d_key ** 0.5)
 
         if attn_bias is not None:
             score += attn_bias
-        score = F.softmax(score)
+        score = F.softmax(score, dim=-1)
         score = self.dropout(score)
 
-        out = score.matmul(v).transpose([0, 2, 1, 3])
-        out = out.reshape([0, 0, out.shape[2] * out.shape[3]])
+        out = score.matmul(v).permute([0, 2, 1, 3])
+        out = out.reshape([out.shape[0], out.shape[1], out.shape[2] * out.shape[3]])
         out = self.o(out)
         return out, cache
 
-
-class PositionWiseFeedForwardLayer(nn.Layer):
+class PositionWiseFeedForwardLayer(nn.Module):
     """ post wise feed forward layer """
 
-    def __init__(self, cfg, name=None):
+    def __init__(self, cfg):
         super(PositionWiseFeedForwardLayer, self).__init__()
-        initializer = nn.initializer.TruncatedNormal(std=cfg['initializer_range'])
         d_model = cfg['hidden_size']
         d_ffn = cfg.get('intermediate_size', 4 * d_model)
 
         self.act = ACT_DICT[cfg['hidden_act']]()
-        self.i = _build_linear(d_model, d_ffn, append_name(name, 'fc_0'), initializer)
-        self.o = _build_linear(d_ffn, d_model, append_name(name, 'fc_1'), initializer)
+        self.i = nn.Linear(d_model, d_ffn)
+        self.o = nn.Linear(d_ffn, d_model)
         prob = cfg.get('intermediate_dropout_prob', 0.)
         self.dropout = nn.Dropout(p=prob)
 
@@ -331,40 +309,63 @@ class PositionWiseFeedForwardLayer(nn.Layer):
         out = self.o(hidden)
         return out
 
+class Aside(nn.Module):
+    def __init__(self, cfg):
+        super(Aside, self).__init__()
+        self.embed0 = nn.Embedding(cfg['aside_emb_0_i'], cfg['aside_emb_0_o']) ## 1432 20
+        self.embed1 = nn.Embedding(cfg['aside_emb_1_i'], cfg['aside_emb_1_o'])# 11 20
+        self.embed2 = nn.Embedding(cfg['aside_emb_2_i'], cfg['aside_emb_2_o'])# 11 20
+        self.embed3 = nn.Embedding(cfg['aside_emb_3_i'], cfg['aside_emb_3_o'])# 13 20
+        self.embed4 = nn.Embedding(cfg['aside_emb_4_i'], cfg['aside_emb_4_o'])# 11 20
+        self.embed5 = nn.Embedding(cfg['aside_emb_5_i'], cfg['aside_emb_5_o'])# 11 20
+        self.embed6 = nn.Embedding(cfg['aside_emb_6_i'], cfg['aside_emb_6_o'])# 11 20
+        self.embed7 = nn.Embedding(cfg['aside_emb_7_i'], cfg['aside_emb_7_o'])# 11 20
+        self.feature_emb_fc1 = nn.Linear(cfg['aside_embed_fc'], cfg['hidden_size'])# 160 768 .t()
+        self.activation = nn.ReLU()
 
-def _build_linear(n_in, n_out, name, init):
-    """
-    """
-    return nn.Linear(
-        n_in,
-        n_out,
-        weight_attr=paddle.ParamAttr(
-            name='%s.w_0' % name if name is not None else None,
-            initializer=init),
-        bias_attr='%s.b_0' % name if name is not None else None)
+        self.feature_emb_fc2 = nn.Linear(cfg['hidden_size'], cfg['aside_cls_out'])# 768 384 .t()
+        self.cls_out = nn.Linear(cfg['aside_cls_out'], 1)# 384 1
 
+    def forward(self, vector_list):
+        x0 = self.embed0(vector_list[0])
+        x1 = self.embed1(vector_list[1])
+        x2 = self.embed2(vector_list[2])
+        x3 = self.embed3(vector_list[3])
+        x4 = self.embed4(vector_list[4])
+        x5 = self.embed5(vector_list[5])
+        x6 = self.embed0(vector_list[6])
+        x7 = self.embed7(vector_list[7])
+        x_cat = torch.cat((x0, x1, x2, x3, x4, x5, x6, x7), dim = 1)
+        x = x_cat.reshape(-1, 1, 1, 160)
 
-def _build_ln(n_in, name):
-    """
-    """
-    return nn.LayerNorm(
-        normalized_shape=n_in,
-        weight_attr=paddle.ParamAttr(
-            name='%s_layer_norm_scale' % name if name is not None else None,
-            initializer=nn.initializer.Constant(1.)),
-        bias_attr=paddle.ParamAttr(
-            name='%s_layer_norm_bias' % name if name is not None else None,
-            initializer=nn.initializer.Constant(0.)))
+        x = self.feature_emb_fc1(x)
+        x = self.activation(x)
 
+        x = self.feature_emb_fc2(x)
+        x = self.activation(x)
 
-def append_name(name, postfix):
-    """ append name with postfix """
-    if name is None:
-        ret = None
-    elif name == '':
-        ret = postfix
-    else:
-        ret = '%s_%s' % (name, postfix)
-    return ret
+        x = self.cls_out(x)
+        return x
 
+class Model(nn.Module):
+    def __init__(self, cfg):
+        super(Model, self).__init__()
 
+        self.aside = Aside(cfg)
+        self.ernie_model = ErnieModel(cfg)
+
+        self.cls_out = nn.Linear(cfg['hidden_size'], 1)# 768 1
+        # self.cls_out.weight.data = WeightDict["cls_out_w"].t()
+        # self.cls_out.bias.data = WeightDict["cls_out_b"]
+
+    def forward(self, src_ids_tensor, sent_ids_tensor, pos_ids_tensor, input_mask_tensor, aside_tensor_list):
+        import pdb
+        pdb.set_trace()
+        cls_aside_out = self.aside(aside_tensor_list)
+
+        pooled, encoded = self.ernie_model(src_ids_tensor, sent_ids_tensor, pos_ids_tensor, input_mask_tensor)
+
+        cls_out = self.cls_out(pooled)
+        x = cls_out + cls_aside_out
+        x = torch.sigmoid(x)
+        return x

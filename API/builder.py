@@ -293,7 +293,7 @@ def process_input_mask(network_helper, input_mask_tensor):
     # attn_bias[B, 1, S, S]
     attn_bias = network_helper.addShuffle(attn_bias, None, (0, 1, 0, -1), None, "input_mask.unsqueeze(-1)")
 
-    network_helper.markOutput(attn_bias)
+    # network_helper.markOutput(attn_bias)
 
     return attn_bias
 
@@ -302,10 +302,12 @@ def build_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_t
         #  x, attn_weights = self.transformer(x)
         #  logits = self.head(x[:, 0])
     cls_aside_out = build_aside(network_helper, weights_dict, aside_tensor_list)
+    # network_helper.markOutput(cls_aside_out)
 
     input_mask_tensor = process_input_mask(network_helper, input_mask_tensor)
 
     x = build_ernie_model(network_helper, config, weights_dict, src_ids_tensor, sent_ids_tensor, pos_ids_tensor, input_mask_tensor)
+    # network_helper.markOutput(x)
 
     #  head.weight [10, 768]
     #  head.bias [10]

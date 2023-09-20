@@ -257,8 +257,10 @@ def main(args):
     dif_sum = 0
     total_num = 0
     for i in range(test_num):
-        output = infer_helper.infer(inputs[i], True)
-        break
+        output = infer_helper.infer(inputs[i], False)
+        print(output[-1])
+        if i == 5:
+            break
 
         # b = onnx_baseline[i].shape[0]
         # print("infer and comparing case", i)

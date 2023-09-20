@@ -38,7 +38,7 @@ def init_trt_plugin(severity=None, lib_name=None, logger=None):
     if logger is None:
         logger = trt.Logger(severity)
 
-    lib_names = ["libnvinfer_plugin.so", "libtrtplugin++.so.1"]
+    lib_names = ["libnvinfer_plugin.so"]
     if lib_name is not None:
         lib_names.append(lib_name)
         # lib_name = "libtrt_plugin_plus.so"
