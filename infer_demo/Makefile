@@ -24,5 +24,5 @@ $(TRT_LIB)libnvinfer_plugin.so \
 -lrt -ldl -lpthread -rdynamic
 
 ernie_test:
-	g++ src/ernie_infer_demo.cpp src/trt_helper.cc -o ernie_infer_demo \
+	g++ src/ernie_infer_demo.cpp src/trt_helper.cpp -o ernie_infer_demo \
 		$(CXX_FLAGS) $(INCLUDE) -Xlinker "-(" $(LIBS) -Xlinker "-)"
