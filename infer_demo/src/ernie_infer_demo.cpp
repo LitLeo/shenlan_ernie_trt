@@ -127,7 +127,9 @@ int main(int argc, char *argv[]) {
   //auto trt_engine = new TrtEngine(model_file, 0);
   // auto trt_context = new TrtContext(trt_engine, 0);
 
-  vector<int> batchs{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  //vector<int> batchs{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  //vector<int> seq_lens{1, 32, 64, 96, 128};
+  vector<int> batchs{1};
   vector<int> seq_lens{1, 32, 64, 96, 128};
   auto context_num = batchs.size() * seq_lens.size();
 
@@ -136,13 +138,12 @@ int main(int argc, char *argv[]) {
   vector<std::shared_ptr<TrtContext>> trt_contexts(context_num);
   for (size_t i = 0; i < context_num; i++) {
     auto context = new TrtContext(trt_engine.get(), i);
-    context->CaptureCudaGraph();
     trt_contexts[i].reset(context);
   }
 
-  for (size_t i = 0; i < context_num; i++) {
-    trt_contexts[i]->CaptureCudaGraph();
-  }
+  //for (size_t i = 0; i < context_num; i++) {
+    //trt_contexts[i]->CaptureCudaGraph();
+  //}
 
   // preprocess
   std::string aline;
@@ -166,15 +167,19 @@ int main(int argc, char *argv[]) {
     int s_idx = 0;
     for (int i = 0; i < seq_lens.size(); i++) {
       if (seq_len <= seq_lens[i]) {
-        s_idx = i + 1;
+        s_idx = i;
         break;
       }
     }
 
-    auto batch_idx = batchs[batch] - 1;
+    auto batch_idx = batchs[batch - 1] - 1;
     int context_idx = batch_idx * seq_lens.size() + s_idx;
 
     trt_contexts[context_idx]->Forward(s);
+
+    idx ++;
+    if (idx % 100 == 0) cout << "Forward " << idx << endl;
+    break;
   }
 
   // postprocess

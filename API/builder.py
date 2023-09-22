@@ -365,7 +365,10 @@ def build_engine(args, config, weights_dict, calibrationCacheFile):
         network_helper.markOutput(out)
 
         if args.cuda_graph:
-            batchs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+            # batchs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+            # seq_lens = [1, 32, 64, 96, 128]
+
+            batchs = [1]
             seq_lens = [1, 32, 64, 96, 128]
 
             for b in batchs:

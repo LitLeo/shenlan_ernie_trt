@@ -51,8 +51,6 @@ TrtEngine::TrtEngine(std::string model_param, int dev_id_)
   auto e = runtime->deserializeCudaEngine((void *)contents.c_str(),
                                           contents.size(), nullptr);
   engine_ = MakeShared(e);
-
-  initLibNvInferPlugins(&trt_logger, "");
 }
 
 constexpr size_t kAlignment = 128;
@@ -63,8 +61,10 @@ constexpr int AlignTo(int a, int b = kAlignment) {
   return ceildiv(a, b) * b;
 }
 
+std::vector<char*> TrtContext::s_device_bindings_;
 
 TrtContext::TrtContext(TrtEngine *trt_engine, int profile_idx) {
+  profile_idx_ = profile_idx;
   engine_ = trt_engine->engine_;
   dev_id_ = trt_engine->dev_id_;
   CUDA_CHECK(cudaSetDevice(dev_id_));
@@ -76,8 +76,6 @@ TrtContext::TrtContext(TrtEngine *trt_engine, int profile_idx) {
 
   start_binding_idx_ = profile_idx * engine_->getNbBindings() /
                        engine_->getNbOptimizationProfiles();
-  auto min_profile = engine_->getProfileDimensions(
-      start_binding_idx_, profile_idx, nvinfer1::OptProfileSelector::kMIN);
   auto max_profile = engine_->getProfileDimensions(
       start_binding_idx_, profile_idx, nvinfer1::OptProfileSelector::kMAX);
 
@@ -91,8 +89,8 @@ TrtContext::TrtContext(TrtEngine *trt_engine, int profile_idx) {
 
   whole_bytes_ = align_input_bytes_ * 4 + align_aside_input_bytes_ * 9;
 
-  cudaMalloc(&d_buffer_, whole_bytes_);
-  cudaMallocHost(&h_buffer_, whole_bytes_);
+  CUDA_CHECK(cudaMalloc(&d_buffer_, whole_bytes_));
+  CUDA_CHECK(cudaMallocHost(&h_buffer_, whole_bytes_));
 
   auto h_buffer_ptr = h_buffer_;
   auto d_buffer_ptr = d_buffer_;
@@ -114,33 +112,6 @@ TrtContext::TrtContext(TrtEngine *trt_engine, int profile_idx) {
     h_buffer_ptr += align_aside_input_bytes_;
     d_buffer_ptr += align_aside_input_bytes_;
   }
-
-}
-
-template<class T>
-void _fill(T* ptr, int size, T v) {
-  for (int i = 0; i < size; i++) ptr[i] = v;
-}
-
-int TrtContext::CaptureCudaGraph() {
-  if (graph_created_) return 1;
-
-  // fill test inputs
-  auto input_size = max_batch_ * max_seq_len_;
-  _fill((int*)host_bindings_[0], input_size, 1);
-  _fill((int*)host_bindings_[1], input_size, 1);
-  _fill((int*)host_bindings_[2], input_size, 1);
-  _fill((float*)host_bindings_[3], input_size, 1.0f);
-
-  _fill((int*)host_bindings_[4], max_batch_, 1);
-  _fill((int*)host_bindings_[5], max_batch_, 1);
-  _fill((int*)host_bindings_[6], max_batch_, 1);
-  _fill((int*)host_bindings_[7], max_batch_, 1);
-  _fill((int*)host_bindings_[8], max_batch_, 1);
-  _fill((int*)host_bindings_[9], max_batch_, 1);
-  _fill((int*)host_bindings_[10], max_batch_, 1);
-  _fill((int*)host_bindings_[11], max_batch_, 1);
-
 
   vector<int> input_dim = {max_batch_, max_seq_len_, 1};
   vector<int> aside_input_dim = {max_batch_, 1, 1};
@@ -167,20 +138,63 @@ int TrtContext::CaptureCudaGraph() {
     assert(0);
   }
 
-  cudaStreamBeginCapture(cuda_stream_, cudaStreamCaptureModeGlobal);
+  for (size_t i = 0; i < device_bindings_.size(); i++) {
+    s_device_bindings_.push_back(device_bindings_[i]);
+  }
+}
 
-  cudaMemcpyAsync(d_buffer_, h_buffer_, whole_bytes_ - align_aside_input_bytes_,
-                  cudaMemcpyHostToDevice, cuda_stream_);
-  // printf("before enqueue\n");
-  context_->enqueueV2((void **)device_bindings_.data(), cuda_stream_, nullptr);
+template<class T>
+void _fill(T* ptr, int size, T v) {
+  for (int i = 0; i < size; i++) ptr[i] = v;
+}
 
-  cudaMemcpyAsync(host_bindings_[12], device_bindings_[12], align_aside_input_bytes_,
-                  cudaMemcpyDeviceToHost, cuda_stream_);
+int TrtContext::CaptureCudaGraph() {
+  if (graph_created_) return 1;
 
-  cudaStreamEndCapture(cuda_stream_, &graph_);
-  cudaGraphInstantiate(&instance_, graph_, NULL, NULL, 0);
+  // fill test inputs
+  auto input_size = max_batch_ * max_seq_len_;
+  _fill((int*)host_bindings_[0], input_size, 1);
+  _fill((int*)host_bindings_[1], input_size, 1);
+  _fill((int*)host_bindings_[2], input_size, 1);
+  _fill((float*)host_bindings_[3], input_size, 1.0f);
+
+  _fill((int*)host_bindings_[4], max_batch_, 1);
+  _fill((int*)host_bindings_[5], max_batch_, 1);
+  _fill((int*)host_bindings_[6], max_batch_, 1);
+  _fill((int*)host_bindings_[7], max_batch_, 1);
+  _fill((int*)host_bindings_[8], max_batch_, 1);
+  _fill((int*)host_bindings_[9], max_batch_, 1);
+  _fill((int*)host_bindings_[10], max_batch_, 1);
+  _fill((int*)host_bindings_[11], max_batch_, 1);
+
+  CUDA_CHECK(cudaMemcpyAsync(d_buffer_, h_buffer_, whole_bytes_ - align_aside_input_bytes_,
+                             cudaMemcpyHostToDevice, cuda_stream_));
+
+  // warm up and let mContext do cublas initialization
+  auto status = context_->enqueueV2((void**)s_device_bindings_.data(), cuda_stream_, nullptr);
+  if (!status) {
+    cerr << "Enqueue failed\n";
+    exit(-1);
+  }
+
+  CUDA_CHECK(cudaStreamBeginCapture(cuda_stream_, cudaStreamCaptureModeRelaxed));
+
+  status = context_->enqueueV2((void**)s_device_bindings_.data(), cuda_stream_, nullptr);
+  if (!status) {
+    cerr << "Enqueue failed\n";
+    exit(-1);
+  }
+
+  CUDA_CHECK(cudaStreamEndCapture(cuda_stream_, &graph_));
+  CUDA_CHECK(cudaStreamSynchronize(cuda_stream_));
+  CUDA_CHECK(cudaGraphInstantiate(&instance_, graph_, NULL, NULL, 0));
+
+  CUDA_CHECK(cudaMemcpyAsync(host_bindings_[12], device_bindings_[12], align_aside_input_bytes_,
+                             cudaMemcpyDeviceToHost, cuda_stream_));
 
   graph_created_ = true;
+
+  cout << "profile_idx=" << profile_idx_ << ", CaptureCudaGraph Done!" << endl;
 
   return 0;
 }
@@ -192,7 +206,7 @@ int TrtContext::Forward(sample &s) {
   auto batch = s.shape_info_0[0];
   auto seq_len = s.shape_info_0[1];
   auto input_bytes = batch * seq_len * sizeof(int);
-  auto aside_input_bytes = batch * seq_len * sizeof(int);
+  auto aside_input_bytes = batch * sizeof(int);
   memcpy(host_bindings_[0], s.i0.data(), input_bytes);
   memcpy(host_bindings_[1], s.i1.data(), input_bytes);
   memcpy(host_bindings_[2], s.i2.data(), input_bytes);
@@ -207,16 +221,46 @@ int TrtContext::Forward(sample &s) {
   memcpy(host_bindings_[10], s.i10.data(), aside_input_bytes);
   memcpy(host_bindings_[11], s.i11.data(), aside_input_bytes);
 
+  cudaEvent_t start, stop;
+  float elapsed_time = 0.0;
+
+  cudaStreamSynchronize(cuda_stream_);
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+  cudaEventRecord(start, 0);
+
+  CUDA_CHECK(cudaMemcpyAsync(d_buffer_, h_buffer_, whole_bytes_ - align_aside_input_bytes_,
+                             cudaMemcpyHostToDevice, cuda_stream_));
+
   if (graph_created_) {
-    cudaGraphLaunch(instance_, cuda_stream_);
-    cudaStreamSynchronize(cuda_stream_);
+    CUDA_CHECK(cudaGraphLaunch(instance_, cuda_stream_));
   } else {
-    assert(0);
+
+    // printf("before enqueue\n");
+    auto status = context_->enqueueV2((void**)s_device_bindings_.data(), cuda_stream_, nullptr);
+    if (!status) {
+      cerr << "Enqueue failed\n";
+      exit(-1);
+    }
+
   }
 
+  CUDA_CHECK(cudaMemcpyAsync(host_bindings_[12], device_bindings_[12], align_aside_input_bytes_,
+                             cudaMemcpyDeviceToHost, cuda_stream_));
+  cudaStreamSynchronize(cuda_stream_);
+
+   cudaStreamSynchronize(cuda_stream_);
+   cudaEventRecord(stop, 0);
+   cudaEventSynchronize(stop);
+   cudaEventElapsedTime(&elapsed_time, start, stop);
+
+   cout << "batch=" << max_batch_ << ", seq_len=" << max_seq_len_
+        << ", enqueue time=" << elapsed_time << "ms" << endl;
+   cudaEventDestroy(start);
+   cudaEventDestroy(stop);
+
   s.out_data.resize(batch);
-  memcpy(s.out_data.data(), device_bindings_[12],
-         batch * sizeof(float));
+  memcpy(s.out_data.data(), host_bindings_[12], batch * sizeof(float));
 
   //// auto dim_str = Dims2String(_inputs_dims[0]);
   //cout << "batch=" << batch << ", seq_len = " << seq_len

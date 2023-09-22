@@ -17,10 +17,11 @@
 // #include "allocator.h"
 
 #ifndef CUDA_CHECK
-#define CUDA_CHECK(status)                                                     \
-  if (status != cudaSuccess) {                                                 \
-    std::cout << "Cuda failure! Error=" << cudaGetErrorString(status)          \
-              << std::endl;                                                    \
+#define CUDA_CHECK(status)                                             \
+  if (status != cudaSuccess) {                                         \
+    std::cout << "Cuda failure! Error=" << cudaGetErrorString(status)  \
+              << std::endl;                                            \
+    assert(0);                                                         \
   }
 #endif
 
@@ -159,12 +160,17 @@ class TrtContext {
   std::vector<char*> device_bindings_;
   std::vector<char*> host_bindings_;
 
+
+  static std::vector<char*> s_device_bindings_;
+
   char *h_buffer_;
   char *d_buffer_;
 
   int max_batch_;
   int max_seq_len_;
   int start_binding_idx_;
+
+  int profile_idx_;
 
   int align_input_bytes_;
   int align_aside_input_bytes_;
