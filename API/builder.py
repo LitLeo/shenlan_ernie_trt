@@ -365,11 +365,11 @@ def build_engine(args, config, weights_dict, calibrationCacheFile):
         network_helper.markOutput(out)
 
         if args.cuda_graph:
-            # batchs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-            # seq_lens = [1, 32, 64, 96, 128]
-
-            batchs = [1]
+            batchs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
             seq_lens = [1, 32, 64, 96, 128]
+
+            # batchs = [1]
+            # seq_lens = [64, 128]
 
             for b in batchs:
                 for s in seq_lens:
@@ -393,17 +393,17 @@ def build_engine(args, config, weights_dict, calibrationCacheFile):
 
         else:
             profile = builder.create_optimization_profile()
-            min_shape = (1, 1, 1)
-            opt_shape = (5, 128, 1)
-            max_shape = (10, 128, 1)
+            min_shape = (1, 128, 1)
+            opt_shape = (1, 128, 1)
+            max_shape = (1, 128, 1)
             profile.set_shape("src_ids", min=min_shape, opt=opt_shape, max=max_shape)
             profile.set_shape("sent_ids", min=min_shape, opt=opt_shape, max=max_shape)
             profile.set_shape("pos_ids", min=min_shape, opt=opt_shape, max=max_shape)
             profile.set_shape("input_mask", min=min_shape, opt=opt_shape, max=max_shape)
 
             min_shape = (1, 1, 1)
-            opt_shape = (5, 1, 1)
-            max_shape = (10, 1, 1)
+            opt_shape = (1, 1, 1)
+            max_shape = (1, 1, 1)
             profile.set_shape("tmp6", min=min_shape, opt=opt_shape, max=max_shape)
             profile.set_shape("tmp7", min=min_shape, opt=opt_shape, max=max_shape)
             profile.set_shape("tmp8", min=min_shape, opt=opt_shape, max=max_shape)

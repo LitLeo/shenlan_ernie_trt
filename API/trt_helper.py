@@ -244,7 +244,7 @@ class TrtNetworkHelper():
 
     # def addLayerNorm(self, layer, x, layer_name=None, precision=None):
     def addLayerNorm(self, x, weight, bias, layer_name=None, precision=None):
-        return x
+        # return x
         """LayerNorm"""
         plg_creator = self.plugin_registry.get_plugin_creator("LayerNorm", "1", "")
         if not plg_creator:

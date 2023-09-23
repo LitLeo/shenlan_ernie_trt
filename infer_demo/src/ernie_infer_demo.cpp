@@ -54,12 +54,12 @@ void field2vec(const std::string &input_str, bool padding,
   int batch_size = shape_info->at(0);
   int seq_len = shape_info->at(1);
   int padding_seq_len = seq_len;
-  if (padding_seq_len >= 64)
+  //if (padding_seq_len >= 64)
     padding_seq_len = (padding_seq_len + 31) / 32 * 32;
   if (i64_vec) {
     for (int i = 0; i < batch_size; ++i) {
       for (int j = 0; j < seq_len; ++j) {
-        i64_vec->push_back(std::stoll(i_v[i * seq_len + j]));
+        i64_vec->push_back(std::stoi(i_v[i * seq_len + j]));
       }
       // padding to MAX_SEQ_LEN
       for (int j = 0; padding && j < padding_seq_len - seq_len; ++j) {
@@ -127,10 +127,10 @@ int main(int argc, char *argv[]) {
   //auto trt_engine = new TrtEngine(model_file, 0);
   // auto trt_context = new TrtContext(trt_engine, 0);
 
-  //vector<int> batchs{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-  //vector<int> seq_lens{1, 32, 64, 96, 128};
-  vector<int> batchs{1};
+  vector<int> batchs{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
   vector<int> seq_lens{1, 32, 64, 96, 128};
+  //vector<int> batchs{1};
+  //vector<int> seq_lens{64, 128};
   auto context_num = batchs.size() * seq_lens.size();
 
   assert(trt_engine->engine_->getNbOptimizationProfiles() == context_num);
@@ -141,9 +141,9 @@ int main(int argc, char *argv[]) {
     trt_contexts[i].reset(context);
   }
 
-  //for (size_t i = 0; i < context_num; i++) {
-    //trt_contexts[i]->CaptureCudaGraph();
-  //}
+  for (size_t i = 0; i < context_num; i++) {
+    trt_contexts[i]->CaptureCudaGraph();
+  }
 
   // preprocess
   std::string aline;
@@ -179,7 +179,7 @@ int main(int argc, char *argv[]) {
 
     idx ++;
     if (idx % 100 == 0) cout << "Forward " << idx << endl;
-    break;
+    //break;
   }
 
   // postprocess
