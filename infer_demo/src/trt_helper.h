@@ -134,6 +134,8 @@ class TrtEngine {
   std::shared_ptr<nvinfer1::ICudaEngine> engine_;
 
   TrtLogger trt_logger;
+
+  void* device_memory_;
 };
 
 class TrtContext {

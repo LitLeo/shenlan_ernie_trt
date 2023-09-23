@@ -10,14 +10,18 @@ import time
 
 from typing import Optional, Tuple
 
+
 def set_tensor_name(tensor, prefix, name):
     tensor.name = prefix + name
+
 
 def set_output_name(layer, prefix, name, out_idx = 0):
     set_tensor_name(layer.get_output(out_idx), prefix, name)
 
+
 def set_output_range(layer, maxval, out_idx = 0):
     layer.get_output(out_idx).set_dynamic_range(-maxval, maxval)
+
 
 def get_mha_dtype(args):
     dtype = trt.float32
@@ -27,6 +31,7 @@ def get_mha_dtype(args):
     # if config.int8 and config.use_int8_multihead and not config.is_calib_mode:
     #     dtype = trt.int8
     return int(dtype)
+
 
 def init_trt_plugin(severity=None, lib_name=None, logger=None):
     """
@@ -38,7 +43,7 @@ def init_trt_plugin(severity=None, lib_name=None, logger=None):
     if logger is None:
         logger = trt.Logger(severity)
 
-    lib_names = ["libnvinfer_plugin.so"]
+    lib_names = ["libnvinfer_plugin.so", "libtrtplugin++.so.1"]
     if lib_name is not None:
         lib_names.append(lib_name)
         # lib_name = "libtrt_plugin_plus.so"
@@ -53,6 +58,7 @@ def init_trt_plugin(severity=None, lib_name=None, logger=None):
     logger.log(logger.INFO, "[TrtHelper LOG] tensorrt plugin init done!")
 
     return logger
+
 
 class TrtNetworkHelper():
     """TensorRT Network Definition helper for Pytorch"""
@@ -89,7 +95,8 @@ class TrtNetworkHelper():
         layer.name = str(self.network.num_layers) + "_" + name
         for i in range(0, layer.num_outputs):
             shape = layer.get_output(i).shape
-            self.logger.log(trt.Logger.INFO, "[Network] " + layer.name + ", output[" + str(i) + "] shape= " + str(shape))
+            self.logger.log(trt.Logger.INFO, "[Network] " + layer.name +
+                ", output[" + str(i) + "] shape= " + str(shape))
 
         return None
 
@@ -135,8 +142,9 @@ class TrtNetworkHelper():
         self.network.mark_output(x)
         self.logger.log(trt.Logger.INFO, "[Network] mark output:" + x.name + ", shape=" + str(x.shape))
 
-    def addConv2d(self, x, weight, bias, out_channels, kernel_size, stride=None, padding=None, dilation=None, groups=None,
-                  layer_name=None, precision=None):
+    def addConv2d(self, x, weight, bias, out_channels, kernel_size, stride=None,
+        padding=None, dilation=None, groups=None,
+        layer_name=None, precision=None):
         """ConvCommon"""
         if layer_name is None:
             layer_name = "nn.Conv2d"
@@ -203,10 +211,36 @@ class TrtNetworkHelper():
 
         return gather_layer.get_output(0)
 
+    def addEmbeddingLayerNorm(self, args, src, sent, mask,
+                              wwordemb, wtokemb, wposemb, wgamma, wbeta,
+                              layer_name=None, precision=None):
+        plg_creator = self.plugin_registry.get_plugin_creator("CustomEmbLayerNormPluginDynamic", "1", "")
+
+        output_fp16 = trt.PluginField("output_fp16",
+            np.array([1 if args.fp16 else 0]).astype(np.int32), trt.PluginFieldType.INT32)
+        mha_type = trt.PluginField("mha_type_id", np.array([get_mha_dtype(args)], np.int32), trt.PluginFieldType.INT32)
+
+        pfc = trt.PluginFieldCollection([wbeta, wgamma, wwordemb, wtokemb, wposemb, output_fp16, mha_type])
+
+        plugin = plg_creator.create_plugin("embeddings", pfc)
+
+        if not plugin:
+            raise RuntimeError("Could not create_plugin CustomEmbLayerNormPluginDynamic")
+
+        inputs = [src, sent, mask]
+        emb_layer = self.network.add_plugin_v2(inputs, plugin)
+
+        if layer_name is None:
+            layer_name = "CustomEmbLayerNormPluginDynamic"
+
+        self.layer_post_process(emb_layer, layer_name, precision)
+        return emb_layer
+
     def addGELU(self, x, layer_name=None, precision=None):
         POW = self.network.add_constant((1, 1, 1), trt.Weights(np.ascontiguousarray([3.0], dtype=np.float32)))
         MULTIPLY = self.network.add_constant((1, 1, 1), trt.Weights(np.ascontiguousarray([0.044715], dtype=np.float32)))
-        SQRT = self.network.add_constant((1, 1, 1), trt.Weights((np.ascontiguousarray([0.79788456080286535587989211986876], dtype=np.float32))))
+        SQRT = self.network.add_constant((1, 1, 1),
+            trt.Weights((np.ascontiguousarray([0.79788456080286535587989211986876], dtype=np.float32))))
         ONE = self.network.add_constant((1, 1, 1), trt.Weights((np.ascontiguousarray([1.0], dtype=np.float32))))
         HALF = self.network.add_constant((1, 1, 1), trt.Weights((np.ascontiguousarray([0.5], dtype=np.float32))))
         X_pow = self.network.add_elementwise(x, POW.get_output(0), trt.ElementWiseOperation.POW)
@@ -244,11 +278,10 @@ class TrtNetworkHelper():
 
     # def addLayerNorm(self, layer, x, layer_name=None, precision=None):
     def addLayerNorm(self, x, weight, bias, layer_name=None, precision=None):
-        # return x
         """LayerNorm"""
-        plg_creator = self.plugin_registry.get_plugin_creator("LayerNorm", "1", "")
+        plg_creator = self.plugin_registry.get_plugin_creator("LayerNormPluginDynamic", "1", "")
         if not plg_creator:
-            raise RuntimeError("Could not find LayerNorm")
+            raise RuntimeError("Could not find LayerNormPluginDynamic")
 
         # dim = layer.weight.size(0)
         # eps = layer.eps
@@ -258,12 +291,12 @@ class TrtNetworkHelper():
         eps = 0.00001
         gamma = weight
         beta = bias
-        # data_type = trt.PluginField("data_type", self.np_data_type, trt.PluginFieldType.INT32)
-        # dim = trt.PluginField("dim", np.array([dim], dtype=np.int32), trt.PluginFieldType.INT32)
-        # eps = trt.PluginField("eps", np.array([eps], dtype=np.float32), trt.PluginFieldType.FLOAT32)
+        data_type = trt.PluginField("data_type", self.np_data_type, trt.PluginFieldType.INT32)
+        dim = trt.PluginField("dim", np.array([dim], dtype=np.int32), trt.PluginFieldType.INT32)
+        eps = trt.PluginField("eps", np.array([eps], dtype=np.float32), trt.PluginFieldType.FLOAT32)
         # gamma_w = trt.PluginField("gamma", gamma.detach().numpy(), trt.PluginFieldType.FLOAT32)
         # beta_w = trt.PluginField("beta", beta.detach().numpy(), trt.PluginFieldType.FLOAT32)
-        pfc = trt.PluginFieldCollection([])
+        pfc = trt.PluginFieldCollection([data_type, dim, eps])
         plugin = plg_creator.create_plugin("LayerNormPluginDynamic", pfc)
         if not plugin:
             raise RuntimeError("Could not create_plugin LayerNormPluginDynamic")
@@ -288,7 +321,8 @@ class TrtNetworkHelper():
 
         weight_layer = self.network.add_constant(weight.shape, trt.Weights(weight))
         weight = weight_layer.get_output(0)
-        # trt_layer = self.network.add_matrix_multiply(x, trt.MatrixOperation.NONE, weight, trt.MatrixOperation.TRANSPOSE)
+        # trt_layer = self.network.add_matrix_multiply(x,
+        # trt.MatrixOperation.NONE, weight, trt.MatrixOperation.TRANSPOSE)
         trt_layer = self.network.add_matrix_multiply(x, trt.MatrixOperation.NONE, weight, trt.MatrixOperation.NONE)
         x = trt_layer.get_output(0)
 
@@ -362,7 +396,7 @@ class TrtNetworkHelper():
 
         return trt_layer.get_output(0)
 
-    ################## unary op ###################
+    # unary op
     def addLog(self, x: trt.ITensor, layer_name=None, precision=None):
         trt_layer = self.network.add_unary(x, trt.UnaryOperation.LOG)
         if layer_name is None:
@@ -375,7 +409,7 @@ class TrtNetworkHelper():
         x = trt_layer.get_output(0)
         return x
 
-    ################## elementwise op ###################
+    # elementwise op
     def addAdd(self, a, b, layer_name=None, precision=None):
         trt_layer = self.network.add_elementwise(a, b, trt.ElementWiseOperation.SUM)
         if layer_name is None:
@@ -448,7 +482,26 @@ class TrtNetworkHelper():
         x = trt_layer.get_output(0)
         return x
 
-    def addCat(self, inputs = [], dim = 0, layer_name=None, precision=None):
+    def addMaskedSoftmax(self, x: trt.ITensor, xs_len: trt.ITensor, scale: float,
+        dim: int = -1, layer_name=None, precision=None) -> trt.ITensor:
+        plg_creator = self.plugin_registry.get_plugin_creator("AttMaskedSoftmaxPluginDynamic", "1", "")
+        if not plg_creator:
+            raise RuntimeError("Could not find AttMaskedSoftmaxPluginDynamic")
+
+        # data_type = trt.PluginField("data_type", self.np_data_type(), dtype=np.int32), trt.PluginFieldType.INT32)
+        data_type = trt.PluginField("data_type", self.np_data_type, trt.PluginFieldType.INT32)
+        scale = trt.PluginField("scale", np.array([scale], dtype=np.float32), trt.PluginFieldType.FLOAT32)
+        pfc = trt.PluginFieldCollection([data_type, scale])
+        plugin = plg_creator.create_plugin("AttMaskedSoftmaxPluginDynamic", pfc)
+        if not plugin:
+            raise RuntimeError("Could not create_plugin AttMaskedSoftmaxPluginDynamic")
+
+        layer = self.network.add_plugin_v2([x, xs_len], plugin)
+        self.set_layer_name(layer, "AttMaskedSoftmaxPluginDynamic")
+        x = layer.get_output(0)
+        return x
+
+    def addCat(self, inputs=None, dim=0, layer_name=None, precision=None):
         assert len(inputs) > 1
 
         trt_layer = self.network.add_concatenation(inputs)
@@ -530,4 +583,91 @@ class TrtNetworkHelper():
         x = trt_layer.get_output(0)
         return x
 
+    def addQKV2CTX(self, args, mult_all, mask, layer_name=None, precision=None):
+        plg_creator = self.plugin_registry.get_plugin_creator("CustomQKVToContextPluginDynamic", "1", "")
 
+        has_mask = mask is not None
+        pf_type = trt.PluginField("type_id", np.array([get_mha_dtype(args)], np.int32), trt.PluginFieldType.INT32)
+        pf_hidden_size = trt.PluginField("hidden_size", np.array([768], np.int32), trt.PluginFieldType.INT32)
+        pf_num_heads = trt.PluginField("num_heads", np.array([12], np.int32), trt.PluginFieldType.INT32)
+        pf_has_mask = trt.PluginField("has_mask", np.array([has_mask], np.int32), trt.PluginFieldType.INT32)
+
+        pfc = trt.PluginFieldCollection([pf_hidden_size, pf_num_heads, pf_has_mask, pf_type])
+        qkv2ctx_plug = plg_creator.create_plugin("qkv2ctx", pfc)
+
+        if not qkv2ctx_plug:
+            raise RuntimeError("Could not create_plugin CustomQKVToContextPluginDynamic")
+
+        qkv_in = [mult_all]
+        qkv_in.append(mask)
+        qkv2ctx = self.network.add_plugin_v2(qkv_in, qkv2ctx_plug)
+
+        if layer_name is None:
+            layer_name = "CustomQKVToContextPluginDynamic"
+
+        self.layer_post_process(qkv2ctx, "context_layer", None)
+
+        return qkv2ctx.get_output(0)
+
+    def addskipln(self, args, input_tensor, skip, wgamma, wbeta, layer_name=None, bias=None):
+
+        """
+        Add the skip layer
+        """
+        plg_creator = self.plugin_registry.get_plugin_creator("CustomSkipLayerNormPluginDynamic", "1", "")
+
+        idims = input_tensor.shape
+        assert len(idims) == 5
+        hidden_size = idims[2]
+
+        dtype = trt.float32
+        if args.fp16:
+            dtype = trt.float16
+
+        pf_ld = trt.PluginField("ld", np.array([768], np.int32), trt.PluginFieldType.INT32)
+        pf_beta = trt.PluginField("beta", wbeta, trt.PluginFieldType.FLOAT32)
+        pf_gamma = trt.PluginField("gamma", wgamma, trt.PluginFieldType.FLOAT32)
+        pf_type = trt.PluginField("type_id", np.array([int(dtype)], np.int32), trt.PluginFieldType.INT32)
+
+        fields = [pf_ld, pf_beta, pf_gamma, pf_type]
+
+        if bias:
+            pf_bias = trt.PluginField("bias", bias, trt.PluginFieldType.FLOAT32)
+            fields.append(pf_bias)
+
+        pfc = trt.PluginFieldCollection(fields)
+        skipln_plug = plg_creator.create_plugin("skipln", pfc)
+
+        skipln_inputs = [input_tensor, skip]
+        layer = self.network.add_plugin_v2(skipln_inputs, skipln_plug)
+        return layer.get_output(0)
+
+
+    def addGatherCat(self, tensor_list, multi_fields, layer_name=None, precision=None):
+        plg_creator = self.plugin_registry.get_plugin_creator("GatherCatPluginDynamic", "1", "")
+        if not plg_creator:
+            raise RuntimeError("Could not find GatherCatPluginDynamic")
+
+        # data_type = trt.PluginField("data_type", self.np_data_type, trt.PluginFieldType.INT32)
+        data_type = trt.PluginField("data_type", np.array([trt.float32], np.int32), trt.PluginFieldType.INT32)
+
+        pfc = trt.PluginFieldCollection([data_type])
+
+        plugin = plg_creator.create_plugin("gather_cat", pfc)
+
+        if not plugin:
+            raise RuntimeError("Could not create_plugin GatherCatPluginDynamic")
+
+        inputs = [tensor_list[0], tensor_list[1], tensor_list[2], tensor_list[3], tensor_list[4], tensor_list[5],
+            tensor_list[6], tensor_list[7],
+        multi_fields[0], multi_fields[1], multi_fields[2], multi_fields[3], multi_fields[4], multi_fields[5],
+            multi_fields[6], multi_fields[7]]
+
+        gathercat_layer = self.network.add_plugin_v2(inputs, plugin)
+
+        if layer_name is None:
+            layer_name = "GatherCatPluginDynamic"
+
+        self.layer_post_process(gathercat_layer, layer_name, precision)
+        return gathercat_layer
+        

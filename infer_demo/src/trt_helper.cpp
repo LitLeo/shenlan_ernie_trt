@@ -52,6 +52,9 @@ TrtEngine::TrtEngine(std::string model_param, int dev_id_)
                                           contents.size(), nullptr);
   engine_ = MakeShared(e);
 
+  auto device_memory_size = engine_->getDeviceMemorySize();
+  CUDA_CHECK(cudaMalloc(&device_memory_, device_memory_size));
+
   cout << "getNbIOTensors:" << engine_->getNbIOTensors() << endl;
 }
 
@@ -72,7 +75,8 @@ TrtContext::TrtContext(TrtEngine *trt_engine, int profile_idx) {
   CUDA_CHECK(cudaSetDevice(dev_id_));
   CUDA_CHECK(cudaStreamCreate(&cuda_stream_));
 
-  context_ = MakeShared(engine_->createExecutionContext());
+  context_ = MakeShared(engine_->createExecutionContextWithoutDeviceMemory());
+  context_->setDeviceMemory(trt_engine->device_memory_);
   // context_->setOptimizationProfileAsync(profile_idx, cuda_stream_);
   context_->setOptimizationProfile(profile_idx);
 
