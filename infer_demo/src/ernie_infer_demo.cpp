@@ -11,9 +11,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
-// #include "paddle_inference_api.h"
+
 #include "trt_helper.h"
-//#include "src/Torch-TensorRT-Plugin/plugin/trtplugin++.h"
 
 using namespace nvinfer1::plugin;
 
@@ -41,7 +40,7 @@ void split_string(const std::string &str, const std::string &delimiter,
 
 void field2vec(const std::string &input_str, bool padding,
                std::vector<int> *shape_info, std::vector<int> *i64_vec,
-               std::vector<float> *f_vec = nullptr) {
+               std::vector<int> *f_vec = nullptr) {
   std::vector<std::string> i_f;
   split_string(input_str, ":", i_f);
   std::vector<std::string> i_v;
@@ -54,11 +53,8 @@ void field2vec(const std::string &input_str, bool padding,
   int batch_size = shape_info->at(0);
   int seq_len = shape_info->at(1);
   int padding_seq_len = seq_len;
-  if (padding_seq_len > 64)
+  if (padding_seq_len >= 64)
     padding_seq_len = (padding_seq_len + 31) / 32 * 32;
-  else
-    padding_seq_len = 64;
-
   if (i64_vec) {
     for (int i = 0; i < batch_size; ++i) {
       for (int j = 0; j < seq_len; ++j) {
@@ -126,27 +122,17 @@ int main(int argc, char *argv[]) {
   std::string test_file = argv[argc_idx++];
   std::string out_file = argv[argc_idx++];
 
-  std::shared_ptr<TrtEngine> trt_engine(new TrtEngine(model_file, 0));
-  //auto trt_engine = new TrtEngine(model_file, 0);
+  // std::string para_file = argv[2];
+  // std::string model_para_file = argv[2];
+  // std::cout << model_para_file << std::endl;
+  // auto predictor = InitPredictor(model_name, para_file);
+  auto trt_engine = new TrtEngine(model_file, 0);
   // auto trt_context = new TrtContext(trt_engine, 0);
 
-  vector<int> batchs{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-  vector<int> seq_lens{64, 96, 128};
-  //vector<int> batchs{1};
-  //vector<int> seq_lens{64, 128};
-  auto context_num = batchs.size() * seq_lens.size();
-
-  assert(trt_engine->engine_->getNbOptimizationProfiles() == context_num);
-
-  vector<std::shared_ptr<TrtContext>> trt_contexts(context_num);
-  for (size_t i = 0; i < context_num; i++) {
-    auto context = new TrtContext(trt_engine.get(), i);
-    trt_contexts[i].reset(context);
-  }
-
-  for (size_t i = 0; i < context_num; i++) {
-    trt_contexts[i]->CaptureCudaGraph();
-  }
+  auto trt_context1 = new TrtContext(trt_engine, 0);
+  auto trt_context2 = new TrtContext(trt_engine, 1);
+  auto trt_context3 = new TrtContext(trt_engine, 2);
+  auto trt_context4 = new TrtContext(trt_engine, 3);
 
   // preprocess
   std::string aline;
@@ -164,25 +150,22 @@ int main(int argc, char *argv[]) {
   // inference
   int idx = 0;
   for (auto &s : sample_vec) {
-    int batch = s.shape_info_0[0];
     int seq_len = s.shape_info_0[1];
-
-    int s_idx = 0;
-    for (int i = 0; i < seq_lens.size(); i++) {
-      if (seq_len <= seq_lens[i]) {
-        s_idx = i;
-        break;
-      }
+    if (seq_len < 64) {
+      trt_context1->Forward(s);
+    } else if (seq_len == 64) {
+      trt_context2->Forward(s);
+    } else if (seq_len <= 96) {
+      trt_context3->Forward(s);
+    } else {
+      trt_context4->Forward(s);
     }
-
-    auto batch_idx = batchs[batch - 1] - 1;
-    int context_idx = batch_idx * seq_lens.size() + s_idx;
-
-    trt_contexts[context_idx]->Forward(s);
-
-    idx ++;
-    if (idx % 100 == 0) cout << "Forward " << idx << endl;
-    //break;
+    // trt_context->Forward(s);
+    idx++;
+    // if (idx == 5)
+    // break;
+    // if (idx == 2)
+    //     break;
   }
 
   // postprocess
@@ -205,6 +188,13 @@ int main(int argc, char *argv[]) {
   }
   ofs.close();
   ifs.close();
+
+  delete trt_engine;
+  // delete trt_context;
+  delete trt_context1;
+  delete trt_context2;
+  delete trt_context3;
+  delete trt_context4;
 
   return 0;
 }

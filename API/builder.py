@@ -286,7 +286,8 @@ def build_aside(network_helper, weights_dict, tensor_list):
     multi_field_6 = weights_dict["multi_field_6"]
     multi_field_7 = weights_dict["multi_field_7"]
 
-    if 0:
+    if False:
+
         multi_field_0_tensor = network_helper.addConstant(multi_field_0)
         multi_field_1_tensor = network_helper.addConstant(multi_field_1)
         multi_field_2_tensor = network_helper.addConstant(multi_field_2)
@@ -393,7 +394,8 @@ def build_engine(args, config, weights_dict, calibration_cache_file):
 
         # Create the network
         src_ids_tensor = network_helper.addInput(name="src_ids", dtype=trt.int32, shape=(-1, -1, 1))
-        pos_ids_tensor = network_helper.addInput(name="pos_ids", dtype=trt.int32, shape=(-1, -1, 1))
+        # pos_ids_tensor = network_helper.addInput(name="pos_ids", dtype=trt.int32, shape=(-1, -1, 1))
+        pos_ids_tensor = None
         sent_ids_tensor = network_helper.addInput(name="sent_ids", dtype=trt.int32, shape=(-1, -1, 1))
         # input_mask_tensor = network_helper.addInput(name="input_mask", dtype=trt.float32, shape=(-1, -1, 1))
         input_mask_tensor = network_helper.addInput(name="input_mask", dtype=trt.int32, shape=(-1, -1, 1))
@@ -416,24 +418,27 @@ def build_engine(args, config, weights_dict, calibration_cache_file):
 
         network_helper.markOutput(out)
 
-        if args.cuda_graph:
-            batchs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-            seq_lens = [64, 96, 128]
+        if args.multi_context:
+            # batchs = [[1, 5], [6, 10]]
+            # seq_lens = [[1,  64], [32, 96], [64, 128]]
+            # seq_lens = [[1, 128]]
+            batchs = [[1, 10]]
+            seq_lens = [[1, 63], [64, 64], [96, 96], [128, 128]]
 
             for b in batchs:
                 for s in seq_lens:
                     profile = builder.create_optimization_profile()
-                    min_shape = (b, s, 1)
-                    opt_shape = (b, s, 1)
-                    max_shape = (b, s, 1)
+                    min_shape = (b[0], s[0], 1)
+                    opt_shape = (b[1], s[1], 1)
+                    max_shape = (b[1], s[1], 1)
                     profile.set_shape("src_ids", min=min_shape, opt=opt_shape, max=max_shape)
                     profile.set_shape("sent_ids", min=min_shape, opt=opt_shape, max=max_shape)
-                    profile.set_shape("pos_ids", min=min_shape, opt=opt_shape, max=max_shape)
+                    # profile.set_shape("pos_ids", min=min_shape, opt=opt_shape, max=max_shape)
                     profile.set_shape("input_mask", min=min_shape, opt=opt_shape, max=max_shape)
 
-                    min_shape = (b, 1, 1)
-                    opt_shape = (b, 1, 1)
-                    max_shape = (b, 1, 1)
+                    min_shape = (b[0], 1, 1)
+                    opt_shape = (b[1], 1, 1)
+                    max_shape = (b[1], 1, 1)
                     profile.set_shape("tmp6", min=min_shape, opt=opt_shape, max=max_shape)
                     profile.set_shape("tmp7", min=min_shape, opt=opt_shape, max=max_shape)
                     profile.set_shape("tmp8", min=min_shape, opt=opt_shape, max=max_shape)
@@ -447,11 +452,12 @@ def build_engine(args, config, weights_dict, calibration_cache_file):
         else:
             profile = builder.create_optimization_profile()
             min_shape = (1, 1, 1)
+            # opt_shape = (5, 64, 1)
             opt_shape = (10, 96, 1)
             max_shape = (10, 128, 1)
             profile.set_shape("src_ids", min=min_shape, opt=opt_shape, max=max_shape)
             profile.set_shape("sent_ids", min=min_shape, opt=opt_shape, max=max_shape)
-            profile.set_shape("pos_ids", min=min_shape, opt=opt_shape, max=max_shape)
+            # profile.set_shape("pos_ids", min=min_shape, opt=opt_shape, max=max_shape)
             profile.set_shape("input_mask", min=min_shape, opt=opt_shape, max=max_shape)
 
             min_shape = (1, 1, 1)
@@ -501,9 +507,9 @@ def load_paddle_weights(path_prefix):
 
     tensor_dict = {}
     for i in state_dict:
-        # print(i)
+        print(i)
         arr = np.array(state_dict[i])
-        # print(arr.shape)
+        print(arr.shape)
 
         tensor_dict[i] = arr
 
@@ -555,7 +561,7 @@ def main():
     parser.add_argument("-w", "--workspace-size", default=12000,
         help="Workspace size in MiB for building the BERT engine", type=int)
     parser.add_argument("-c", "--calib_path", help="calibration cache path", required=False)
-    parser.add_argument("-g", "--cuda_graph", action="store_true", help="calibration cache path", required=False)
+    parser.add_argument("-m", "--multi_context", action="store_true", help="calibration cache path", required=False)
     # parser.add_argument("-n", "--calib-num", help="calibration cache path", required=False)
 
     args, _ = parser.parse_known_args()

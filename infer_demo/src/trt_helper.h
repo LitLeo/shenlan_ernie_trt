@@ -14,16 +14,44 @@
 #include "NvInfer.h"
 #include "NvInferPlugin.h"
 
-// #include "allocator.h"
-
 #ifndef CUDA_CHECK
-#define CUDA_CHECK(status)                                             \
-  if (status != cudaSuccess) {                                         \
-    std::cout << "Cuda failure! Error=" << cudaGetErrorString(status)  \
-              << std::endl;                                            \
-    assert(0);                                                         \
+#define CUDA_CHECK(status)                                                     \
+  if (status != cudaSuccess) {                                                 \
+    std::cout << "Cuda failure! Error=" << cudaGetErrorString(status)          \
+              << std::endl;                                                    \
   }
 #endif
+
+struct sample{
+    std::string qid;
+    std::string label;
+    std::vector<int> shape_info_0;
+    std::vector<int> i0;
+    std::vector<int> shape_info_1;
+    std::vector<int> i1;
+    std::vector<int> shape_info_2;
+    std::vector<int> i2;
+    std::vector<int> shape_info_3;
+    std::vector<int> i3;
+    std::vector<int> shape_info_4;
+    std::vector<int> i4;
+    std::vector<int> shape_info_5;
+    std::vector<int> i5;
+    std::vector<int> shape_info_6;
+    std::vector<int> i6;
+    std::vector<int> shape_info_7;
+    std::vector<int> i7;
+    std::vector<int> shape_info_8;
+    std::vector<int> i8;
+    std::vector<int> shape_info_9;
+    std::vector<int> i9;
+    std::vector<int> shape_info_10;
+    std::vector<int> i10;
+    std::vector<int> shape_info_11;
+    std::vector<int> i11;
+    std::vector<float> out_data;
+    uint64_t timestamp;
+};
 
 template <typename T> using cuda_shared_ptr = std::shared_ptr<T>;
 
@@ -71,36 +99,9 @@ template <typename T> inline std::shared_ptr<T> MakeShared(T *t) {
   return std::shared_ptr<T>(t, TrtDestroyer());
 }
 
-struct sample{
-    std::string qid;
-    std::string label;
-    std::vector<int> shape_info_0;
-    std::vector<int> i0;
-    std::vector<int> shape_info_1;
-    std::vector<int> i1;
-    std::vector<int> shape_info_2;
-    std::vector<int> i2;
-    std::vector<int> shape_info_3;
-    std::vector<float> i3;
-    std::vector<int> shape_info_4;
-    std::vector<int> i4;
-    std::vector<int> shape_info_5;
-    std::vector<int> i5;
-    std::vector<int> shape_info_6;
-    std::vector<int> i6;
-    std::vector<int> shape_info_7;
-    std::vector<int> i7;
-    std::vector<int> shape_info_8;
-    std::vector<int> i8;
-    std::vector<int> shape_info_9;
-    std::vector<int> i9;
-    std::vector<int> shape_info_10;
-    std::vector<int> i10;
-    std::vector<int> shape_info_11;
-    std::vector<int> i11;
-    std::vector<float> out_data;
-    uint64_t timestamp;
-};
+// BEGIN_LIB_NAMESPACE {
+
+// Undef levels to support LOG(LEVEL)
 
 /**
  * \brief Trt TrtLogger 日志类，全局对象
@@ -134,15 +135,11 @@ class TrtEngine {
   std::shared_ptr<nvinfer1::ICudaEngine> engine_;
 
   TrtLogger trt_logger;
-
-  void* device_memory_;
 };
 
 class TrtContext {
  public:
-  TrtContext(TrtEngine* engine, int profile_idx);
-
-  int CaptureCudaGraph();
+  TrtContext(TrtEngine *engine, int profile_idx);
 
   int Forward(sample &s);
 
@@ -159,28 +156,16 @@ class TrtContext {
   // The all dims of all inputs.
   std::vector<nvinfer1::Dims> inputs_dims_;
 
-  std::vector<char*> device_bindings_;
-  std::vector<char*> host_bindings_;
-
-
-  static std::vector<char*> s_device_bindings_;
+  std::vector<char *> device_bindings_;
 
   char *h_buffer_;
   char *d_buffer_;
 
   int max_batch_;
+  int min_batch_;
   int max_seq_len_;
+  int min_seq_len_;
   int start_binding_idx_;
-
-  int profile_idx_;
-
-  int align_input_bytes_;
-  int align_aside_input_bytes_;
-  int whole_bytes_;
-
-  cudaGraph_t graph_;
-  cudaGraphExec_t instance_;
-  bool graph_created_ = false;
 
   // TrtLogger trt_logger;
 };
